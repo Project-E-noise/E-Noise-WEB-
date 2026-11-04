@@ -1,0 +1,33 @@
+{
+  "name": "project-enoise-backend",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true,
+  "type": "module",
+  "description": "Node.js + Express REST API backend for Project E-Noise (Studify Study Hub noise monitoring).",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "db:migrate": "node db/migrate.js",
+    "db:seed": "node db/seed.js",
+    "simulate": "node scripts/simulate-device.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "mqtt": "^5.10.1",
+    "nodemailer": "^10.0.10",
+    "pg": "^8.23.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
