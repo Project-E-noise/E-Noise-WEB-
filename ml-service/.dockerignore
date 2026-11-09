@@ -1,0 +1,6 @@
+.venv
+venv
+__pycache__
+*.pyc
+finetune_stub.py
+.env

@@ -1,3 +1,14 @@
+---
+title: E-Noise ML Service
+emoji: 🔊
+colorFrom: green
+colorTo: blue
+sdk: docker
+app_port: 7860
+pinned: false
+---
+<!-- The block above is read by Hugging Face Spaces (Docker SDK). Leave it at the very top. -->
+
 # Project E-Noise — ML classification service (Phase 7)
 
 A small FastAPI microservice that classifies a short audio clip into one of
@@ -37,7 +48,35 @@ pin it somewhere persistent so it isn't re-downloaded every restart).
 Point the Node backend at it via `server/.env`:
 ```
 ML_SERVICE_URL=http://localhost:8001
+ML_API_KEY=            # optional locally; must match the service's ML_API_KEY
 ```
+
+### Environment variables
+
+| Name | Default | Purpose |
+|---|---|---|
+| `ML_API_KEY` | empty | Shared secret. When set, `/classify` needs the header `X-API-Key: <value>`. Always set it on Hugging Face (Spaces are public). |
+| `TFHUB_CACHE_DIR` | temp dir | Where YAMNet is cached. |
+| `YAMNET_URL` | `https://tfhub.dev/google/yamnet/1` | Model location (rarely changed). |
+
+If startup fails with "contains neither saved_model.pb nor saved_model.pbtxt",
+an earlier download was interrupted: delete the folder named in the error
+(inside `tfhub_modules`) and start again.
+
+## Deploying on Hugging Face Spaces (free CPU)
+
+1. Create a new Space -> SDK **Docker** -> blank template, hardware **CPU basic (free)**.
+2. Push the contents of this `ml-service/` folder (not the whole repo) to the Space's git repo.
+   The `Dockerfile` installs the requirements, downloads YAMNet during the build and
+   listens on port 7860.
+3. In the Space -> Settings -> **Variables and secrets**, add a secret `ML_API_KEY`
+   (a long random string). Put the same value in the backend's `ML_API_KEY`.
+4. The Space URL is `https://<username>-<space-name>.hf.space`; set that as
+   `ML_SERVICE_URL` on the backend. Check `https://<...>.hf.space/health`.
+
+Free Spaces go to sleep when unused and take a while to wake up. The backend
+gives up on a request after 15 s and simply keeps working without a label
+(incidents then use the fallback category).
 If this service isn't running, the backend logs a warning and keeps
 working without classification — it's an enhancement, not a hard
 dependency of Phases 5/6.
@@ -45,7 +84,8 @@ dependency of Phases 5/6.
 ## API
 
 ### `POST /classify`
-Body: raw WAV bytes, `Content-Type: audio/wav` (mono PCM16, any sample
+Header: `X-API-Key: <ML_API_KEY>` (only when `ML_API_KEY` is set; otherwise 401).
+Body: raw WAV bytes up to 2 MB, `Content-Type: audio/wav` (mono PCM16, any sample
 rate — this service resamples to YAMNet's required 16kHz if needed).
 
 Response:
