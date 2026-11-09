@@ -2,7 +2,7 @@
   "name": "project-enoise-backend",
   "version": "0.1.0",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
+    "dev": "node --watch src/server.js",
     "db:migrate": "node db/migrate.js",
     "db:seed": "node db/seed.js",
     "simulate": "node scripts/simulate-device.js"
@@ -26,8 +26,5 @@
     "nodemailer": "^10.0.10",
     "pg": "^8.23.0",
     "ws": "^8.18.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.4"
   }
 }
