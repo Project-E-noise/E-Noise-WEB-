@@ -9,78 +9,122 @@ import { publishLedState, requestAudioClip } from "../mqtt/mqttClient.js";
 import { classifyAudioClip } from "./mlClient.js";
 import { isLikelyWav } from "../mqtt/topics.js";
 
-// How often (at most) to ask a node for a fresh audio clip while it stays
-// above warning_threshold. Keeps a sustained loud streak from triggering a
-// capture request on every single telemetry message (once/second) — one
-// clip every few seconds is plenty to keep the classification current, and
-// matches the spec's "no continuous audio" privacy posture (Phase 7 only
-// captures audio when the table is already noteworthy, never at baseline).
+// Ask a loud table for a new audio clip at most once every 5 seconds
+// (audio is only captured while the table is above its warning threshold).
 const AUDIO_RECLASSIFY_SECONDS = 5;
 
-// Phase 5: turns one MQTT telemetry message into stored readings, the
-// 10-second critical-confirmation decision, an LED command back to the
-// device, and a WebSocket push to every connected dashboard.
-//
-// The confirmation state machine itself lives entirely in the sensor_status
-// row (monitoring_since / led_critical / active_incident_id — see migration
-// 009), not in a separate in-memory map, so it survives a server restart
-// mid-streak and works correctly even if a second backend instance were
-// ever run (only one writes at a time per table since MQTT is 1 message
-// at a time here, so no extra locking is needed for this project's scale).
+// Devices send one reading per second. If the gap since the previous
+// reading is longer than this, a running "loud" streak starts over,
+// because we can't know it stayed loud during the gap.
+const MAX_READING_GAP_SECONDS = 5;
+
+// Used when the ML service gave no label during the whole streak. The
+// database requires one of the four categories, so this is a fallback,
+// not a classifier result.
+const FALLBACK_CATEGORY = "Loud Conversation";
+
+const secondsBetween = (later, earlier) => (new Date(later).getTime() - new Date(earlier).getTime()) / 1000;
+
+/**
+ * Handles one telemetry message: store the reading, run the critical
+ * confirmation rule, send the LED state back to the device, and push the
+ * update to open dashboards.
+ *
+ * mqttClient.js processes messages for the same node one at a time, so two
+ * readings can never run the confirmation rule at the same moment.
+ */
 export async function ingestTelemetry(nodeId, { db_level, classification, confidence, timestamp }) {
   const table = await tablesModel.findBySensorNodeId(nodeId);
   if (!table) {
-    // eslint-disable-next-line no-console
-    console.warn(`[telemetry] No table registered for sensor_node_id "${nodeId}" — add it under Table Configuration first.`);
+    console.warn(`[telemetry] No table registered for sensor_node_id "${nodeId}". Add it under Table Configuration first.`);
     return;
   }
 
-  await noiseReadingsModel.create({
-    table_id: table.id,
-    db_level,
+  const now = new Date().toISOString();
+  const previous = await sensorStatusModel.findByTableId(table.id);
+  if (!previous) return;
+
+  await noiseReadingsModel.create({ table_id: table.id, db_level, classification, confidence, recorded_at: timestamp || now });
+  await sensorStatusModel.recordTelemetry(table.id, {
+    current_db: db_level,
     classification,
     confidence,
-    recorded_at: timestamp || new Date().toISOString()
+    clearClassification: !classification && db_level < Number(table.warning_threshold),
+    seenAt: now
   });
 
-  await sensorStatusModel.recordTelemetry(table.id, { current_db: db_level, classification, confidence });
+  await maybeRequestAudio(table, db_level, previous);
+  const ledCritical = await runConfirmationEngine(table, db_level, previous, now);
 
-  await maybeRequestAudio(table, db_level);
-  await runConfirmationEngine(table, db_level);
-
-  const ledCounts = computeLedCounts(db_level, table);
-  const sensorStatus = await sensorStatusModel.findByTableId(table.id);
-  publishLedState(nodeId, { ...ledCounts, critical: sensorStatus?.led_critical ?? false });
-
-  const updated = await serializeTable(table);
-  broadcastTableUpdate(updated);
+  publishLedState(nodeId, { ...computeLedCounts(db_level, table), critical: ledCritical });
+  broadcastTableUpdate(await serializeTable(table));
 }
 
-// Phase 7: request a fresh audio clip for classification once a table
-// crosses warning_threshold, throttled to at most one request per
-// AUDIO_RECLASSIFY_SECONDS. A quiet table is never asked for audio at all.
-async function maybeRequestAudio(table, dbLevel) {
-  if (dbLevel == null || dbLevel < Number(table.warning_threshold)) return;
-
-  const sensorStatus = await sensorStatusModel.findByTableId(table.id);
-  if (!sensorStatus) return;
-
+// Ask the device for an audio clip when the table is loud (throttled).
+async function maybeRequestAudio(table, dbLevel, sensorStatus) {
+  if (dbLevel < Number(table.warning_threshold)) return;
   const last = sensorStatus.last_audio_requested_at;
-  const elapsedSeconds = last ? (Date.now() - new Date(last).getTime()) / 1000 : Infinity;
-  if (elapsedSeconds < AUDIO_RECLASSIFY_SECONDS) return;
-
+  if (last && secondsBetween(new Date(), last) < AUDIO_RECLASSIFY_SECONDS) return;
   requestAudioClip(table.sensor_node_id);
   await sensorStatusModel.markAudioRequested(table.id);
 }
 
 /**
- * A device responded to an audio-request with a WAV clip. Forwards it to
- * the ML service, stores only the resulting label/confidence (never the
- * audio itself — see topics.js's isLikelyWav doc comment on the "no raw
- * audio storage" rule), and broadcasts the update. If classification lands
- * while a critical streak is still being confirmed, the next confirmation
- * check picks up the fresh sensorStatus.classification automatically —
- * no separate wiring needed there.
+ * The critical confirmation rule. The critical bulb and a CONFIRMED
+ * incident only happen after the level stays at/above critical_threshold
+ * for confirmation_seconds in a row. Returns the new led_critical value.
+ * State is stored in sensor_status, so it survives a server restart.
+ */
+async function runConfirmationEngine(table, dbLevel, status, now) {
+  const aboveCritical = dbLevel >= Number(table.critical_threshold);
+
+  if (!aboveCritical) {
+    // Quiet again: switch the bulb off, or drop an unconfirmed streak.
+    // A confirmed incident stays in the log; it really happened.
+    if (status.led_critical) await sensorStatusModel.clearCritical(table.id);
+    else if (status.monitoring_since) await sensorStatusModel.clearMonitoring(table.id);
+    return false;
+  }
+
+  if (status.led_critical) return true; // already confirmed, same streak
+
+  if (!status.monitoring_since) {
+    await sensorStatusModel.startMonitoring(table.id, now);
+    return false;
+  }
+
+  // Readings stopped for a while: start counting again from now.
+  if (!status.last_seen || secondsBetween(now, status.last_seen) > MAX_READING_GAP_SECONDS) {
+    await sensorStatusModel.restartMonitoring(table.id, now);
+    return false;
+  }
+
+  const elapsedSeconds = secondsBetween(now, status.monitoring_since);
+  if (elapsedSeconds < Number(table.confirmation_seconds)) return false;
+
+  // Sustained long enough: confirm. The classification normally comes from
+  // the ML service (audio is requested as soon as the table passes warning).
+  const latest = await sensorStatusModel.findByTableId(table.id);
+  const incident = await createIncident({
+    table_id: table.id,
+    category: latest?.classification || FALLBACK_CATEGORY,
+    db_level: dbLevel,
+    confidence: latest?.classification && latest.confidence != null ? Number(latest.confidence) : null,
+    duration_seconds: Math.round(elapsedSeconds),
+    bulb_triggered: true,
+    status: "CONFIRMED",
+    occurred_at: new Date(status.monitoring_since).toISOString()
+  });
+
+  await sensorStatusModel.confirmCritical(table.id, incident.id);
+  broadcastIncidentCreated(incident);
+  return true;
+}
+
+/**
+ * A device sent a WAV clip (after an audio-request). Forward it to the ML
+ * service and store only the label and confidence; the audio itself is
+ * never saved anywhere.
  */
 export async function ingestAudioClip(nodeId, wavBuffer) {
   const table = await tablesModel.findBySensorNodeId(nodeId);
@@ -92,71 +136,13 @@ export async function ingestAudioClip(nodeId, wavBuffer) {
   }
 
   const result = await classifyAudioClip(wavBuffer);
-  if (!result) return; // ML service unreachable/errored — telemetry keeps working without it
+  if (!result) return; // ML service asleep or down: everything else keeps working
 
-  await sensorStatusModel.recordClassification(table.id, {
-    classification: result.category,
-    confidence: result.confidence
-  });
-
-  const updated = await serializeTable(table);
-  broadcastTableUpdate(updated);
+  await sensorStatusModel.recordClassification(table.id, { classification: result.category, confidence: result.confidence });
+  broadcastTableUpdate(await serializeTable(table));
 }
 
-async function runConfirmationEngine(table, dbLevel) {
-  const critical = Number(table.critical_threshold);
-  const sensorStatus = await sensorStatusModel.findByTableId(table.id);
-  if (!sensorStatus) return;
-
-  const aboveCritical = dbLevel != null && dbLevel >= critical;
-
-  if (!aboveCritical) {
-    if (sensorStatus.led_critical) {
-      // The confirmed condition has cleared — turn the bulb off. The
-      // incident record itself stays (it really happened); we just stop
-      // treating it as "currently ongoing".
-      await sensorStatusModel.clearCritical(table.id);
-    } else if (sensorStatus.monitoring_since) {
-      // Never reached confirmation_seconds — dismiss silently, no incident.
-      await sensorStatusModel.clearMonitoring(table.id);
-    }
-    return;
-  }
-
-  if (sensorStatus.led_critical) return; // already confirmed and ongoing — nothing new to do
-
-  if (!sensorStatus.monitoring_since) {
-    await sensorStatusModel.startMonitoring(table.id);
-    return;
-  }
-
-  const elapsedSeconds = (Date.now() - new Date(sensorStatus.monitoring_since).getTime()) / 1000;
-  if (elapsedSeconds < Number(table.confirmation_seconds)) return; // still within the confirmation window
-
-  // sensorStatus.classification is populated by ingestAudioClip() once the
-  // ML service (Phase 7, ml-service/) returns a result for a requested
-  // clip — maybeRequestAudio() above ensures one was asked for as soon as
-  // this table crossed warning_threshold, so by the time a streak reaches
-  // confirmation_seconds there's normally already a real classification.
-  // The "Loud Conversation" fallback only fires if the ML service was
-  // unreachable/slow for this entire streak (the schema requires one of
-  // the four exact categories; leaving it null isn't an option).
-  const incident = await createIncident({
-    table_id: table.id,
-    category: sensorStatus.classification || "Loud Conversation",
-    db_level: dbLevel,
-    confidence: sensorStatus.confidence,
-    duration_seconds: Math.round(elapsedSeconds),
-    bulb_triggered: true,
-    status: "CONFIRMED",
-    occurred_at: sensorStatus.monitoring_since
-  });
-
-  await sensorStatusModel.confirmCritical(table.id, incident.id);
-  broadcastIncidentCreated(incident);
-}
-
-/** Explicit online/offline status message (also fires as MQTT's Last Will on an ungraceful disconnect). */
+/** Online/offline status message (also sent by the broker as the device's Last Will). */
 export async function ingestStatus(nodeId, { online }) {
   const table = await tablesModel.findBySensorNodeId(nodeId);
   if (!table) return;
@@ -164,6 +150,5 @@ export async function ingestStatus(nodeId, { online }) {
   if (online) await sensorStatusModel.setOnline(table.id, true);
   else await sensorStatusModel.setOffline(table.id);
 
-  const updated = await serializeTable(table);
-  broadcastTableUpdate(updated);
+  broadcastTableUpdate(await serializeTable(table));
 }

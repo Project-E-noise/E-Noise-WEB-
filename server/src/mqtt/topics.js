@@ -16,6 +16,8 @@
 // get lost, but a duplicate delivery is harmless (each is just another
 // noise_readings row, or one extra classification call).
 
+import { ML_CATEGORIES } from "../data/constants.js";
+
 export const TOPIC_PREFIX = "enoise";
 
 export function telemetryTopic(nodeId) {
@@ -38,7 +40,6 @@ export const TELEMETRY_SUBSCRIBE_FILTER = `${TOPIC_PREFIX}/+/telemetry`;
 export const STATUS_SUBSCRIBE_FILTER = `${TOPIC_PREFIX}/+/status`;
 export const AUDIO_SUBSCRIBE_FILTER = `${TOPIC_PREFIX}/+/audio`;
 
-export const ML_CATEGORIES = ["Loud Conversation", "Mobile Phone Noise", "Impact Noise", "Ambient Baseline"];
 
 /**
  * Extract the node id from a topic that matched one of the wildcard filters
@@ -70,9 +71,11 @@ export function parseTelemetry(raw) {
   } catch {
     return { error: "Payload is not valid JSON." };
   }
+  if (!data || typeof data !== "object") return { error: "Payload must be a JSON object." };
 
   const db_level = Number(data.db_level);
   if (!Number.isFinite(db_level)) return { error: "db_level is required and must be a number." };
+  if (db_level < 0 || db_level > 200) return { error: "db_level must be between 0 and 200." };
 
   let classification = null;
   if (data.classification != null) {
@@ -81,14 +84,16 @@ export function parseTelemetry(raw) {
   }
 
   let confidence = null;
-  if (data.confidence != null && Number.isFinite(Number(data.confidence))) {
-    confidence = Number(data.confidence);
-  }
+  const conf = Number(data.confidence);
+  if (data.confidence != null && Number.isFinite(conf) && conf >= 0 && conf <= 1) confidence = conf;
 
   let timestamp = null;
   if (data.timestamp) {
+    // Ignore device clocks that are clearly wrong (more than a day off).
     const parsed = new Date(data.timestamp);
-    if (!Number.isNaN(parsed.getTime())) timestamp = parsed.toISOString();
+    if (!Number.isNaN(parsed.getTime()) && Math.abs(parsed.getTime() - Date.now()) < 24 * 60 * 60 * 1000) {
+      timestamp = parsed.toISOString();
+    }
   }
 
   return { db_level, classification, confidence, timestamp };

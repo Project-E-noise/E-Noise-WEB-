@@ -1,7 +1,9 @@
 import { query } from "../config/db.js";
+import { EFFECTIVE_STATUS } from "./occupantsModel.js";
 
+// Clients are occupants with a login. status already accounts for ended bans.
 const CREDENTIAL_COLUMNS = `id, full_name, email, contact, password_hash, email_verified, is_active,
-  verification_token, verification_token_expires_at, status, ban_until, created_at`;
+  verification_token, verification_token_expires_at, ${EFFECTIVE_STATUS} AS status, ban_until, strikes_since, created_at`;
 
 export function publicClient(occupant) {
   return {
@@ -10,7 +12,8 @@ export function publicClient(occupant) {
     contact: occupant.contact || "",
     status: occupant.status,
     email_verified: occupant.email_verified,
-    ban_until: occupant.ban_until,
+    // Only show the ban end date while the ban is active.
+    ban_until: occupant.status === "BANNED" ? occupant.ban_until : null,
     created_at: occupant.created_at
   };
 }
@@ -121,10 +124,3 @@ export async function filteredViolationCount(id, { from, to }) {
   );
   return rows[0].count;
 }
-
-export async function violationCount(id) {
-  const { rows } = await query("SELECT COUNT(*)::int AS count FROM violations WHERE occupant_id=$1", [id]);
-  return rows[0].count;
-}
-// The incidents service assigns each new violation as previous count + 1.
-export const currentViolationCount = violationCount;

@@ -1,13 +1,17 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
 import * as exportService from "../services/exportService.js";
 
-function sendCsv(res, filename, csv) {
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  res.send(csv);
+// One handler per export type; each sends the file as a download.
+function exportOf(type) {
+  return asyncHandler(async (req, res) => {
+    const file = await exportService.buildExport(type, req.query);
+    res.setHeader("Content-Type", file.contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
+    res.send(file.body);
+  });
 }
 
-export const readings = asyncHandler(async (req, res) => sendCsv(res, "noise_readings.csv", await exportService.readingsCsv()));
-export const incidents = asyncHandler(async (req, res) => sendCsv(res, "incidents.csv", await exportService.incidentsCsv()));
-export const violations = asyncHandler(async (req, res) => sendCsv(res, "violations.csv", await exportService.violationsCsv()));
-export const tables = asyncHandler(async (req, res) => sendCsv(res, "tables.csv", await exportService.tablesCsv()));
+export const readings = exportOf("readings");
+export const incidents = exportOf("incidents");
+export const violations = exportOf("violations");
+export const tables = exportOf("tables");

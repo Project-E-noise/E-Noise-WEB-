@@ -27,29 +27,44 @@ export async function setOnline(tableId, isOnline) {
 }
 
 // Called on every MQTT telemetry message: marks the node online and stores
-// the latest raw reading. Does not touch the critical-confirmation columns —
-// telemetryService updates those separately once it has decided what the
-// confirmation state machine should do with this reading.
-export async function recordTelemetry(tableId, { current_db, classification, confidence }) {
+// the latest reading. `seenAt` is the app's clock (the confirmation timer
+// uses the same clock, so a server/database clock difference can't matter).
+//
+// Classification: the firmware doesn't send one, so a missing value keeps
+// the last ML result instead of wiping it. When the table is quiet again
+// (clearClassification), the old label is cleared.
+export async function recordTelemetry(tableId, { current_db, classification, confidence, clearClassification, seenAt }) {
   const { rows } = await query(
     `UPDATE sensor_status
-     SET is_online = TRUE, last_seen = NOW(), current_db = $2, classification = $3, confidence = $4, updated_at = NOW()
+     SET is_online = TRUE, last_seen = $6, current_db = $2,
+         classification = CASE WHEN $5 THEN NULL WHEN $3::text IS NOT NULL THEN $3 ELSE classification END,
+         confidence = CASE WHEN $5 THEN NULL WHEN $3::text IS NOT NULL THEN $4 ELSE confidence END,
+         updated_at = NOW()
      WHERE table_id = $1
      RETURNING *`,
-    [tableId, current_db, classification ?? null, confidence ?? null]
+    [tableId, current_db, classification ?? null, confidence ?? null, Boolean(clearClassification), seenAt]
   );
   return rows[0] || null;
 }
 
-// Starts (or continues) an above-critical streak. Only sets monitoring_since
-// the first time; safe to call on every reading while the streak continues.
-export async function startMonitoring(tableId) {
+// Starts an above-critical streak at `since` (app clock). Only sets it if
+// no streak is running yet.
+export async function startMonitoring(tableId, since) {
   const { rows } = await query(
     `UPDATE sensor_status
-     SET monitoring_since = COALESCE(monitoring_since, NOW()), updated_at = NOW()
+     SET monitoring_since = COALESCE(monitoring_since, $2), updated_at = NOW()
      WHERE table_id = $1
      RETURNING *`,
-    [tableId]
+    [tableId, since]
+  );
+  return rows[0] || null;
+}
+
+// Restarts a streak from `since` (used after a gap in readings).
+export async function restartMonitoring(tableId, since) {
+  const { rows } = await query(
+    `UPDATE sensor_status SET monitoring_since = $2, updated_at = NOW() WHERE table_id = $1 RETURNING *`,
+    [tableId, since]
   );
   return rows[0] || null;
 }
@@ -111,13 +126,16 @@ export async function recordClassification(tableId, { classification, confidence
   );
   return rows[0] || null;
 }
-// A node stopped publishing (MQTT LWT fired, or a heartbeat sweep noticed
-// it went stale). Confirmed-critical state is left alone deliberately: an
-// offline sensor doesn't mean the noise stopped, so we don't silently
-// clear an already-confirmed incident's bulb just because the node dropped.
+// A node stopped publishing (MQTT Last Will fired). A confirmed critical
+// bulb is left alone (the noise may not have stopped), but an unconfirmed
+// streak is cancelled: we can't know the noise was sustained while offline.
 export async function setOffline(tableId) {
   const { rows } = await query(
-    `UPDATE sensor_status SET is_online = FALSE, updated_at = NOW() WHERE table_id = $1 RETURNING *`,
+    `UPDATE sensor_status
+     SET is_online = FALSE,
+         monitoring_since = CASE WHEN led_critical THEN monitoring_since ELSE NULL END,
+         updated_at = NOW()
+     WHERE table_id = $1 RETURNING *`,
     [tableId]
   );
   return rows[0] || null;

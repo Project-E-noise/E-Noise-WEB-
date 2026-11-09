@@ -3,83 +3,119 @@ import * as tablesModel from "../models/tablesModel.js";
 import * as tableAssignmentsModel from "../models/tableAssignmentsModel.js";
 import * as occupantsModel from "../models/occupantsModel.js";
 import { withTransaction } from "../config/db.js";
-import { badRequest, notFound } from "../utils/errors.js";
-import { recordViolationIfApplicable } from "./violationsService.js";
+import { ML_CATEGORIES, INCIDENT_STATUSES } from "../data/constants.js";
+import { notFound } from "../utils/errors.js";
+import * as check from "../utils/validate.js";
+import { recordViolationIfApplicable, removeViolationForIncident } from "./violationsService.js";
 
-async function serializeIncident(incident) {
-  const table = await tablesModel.findById(incident.table_id);
-  const occupant = incident.occupant_id ? await occupantsModel.findById(incident.occupant_id) : null;
+/** API shape for one incident row (from the joined queries in incidentsModel). */
+export function serializeIncident(row) {
   return {
-    ...incident,
-    table: table ? { id: table.id, table_number: table.table_number } : null,
-    occupant: occupant ? { id: occupant.id, full_name: occupant.full_name } : null
+    id: row.id,
+    table_id: row.table_id,
+    occupant_id: row.occupant_id,
+    category: row.category,
+    db_level: Number(row.db_level),
+    confidence: row.confidence != null ? Number(row.confidence) : null,
+    duration_seconds: row.duration_seconds,
+    bulb_triggered: row.bulb_triggered,
+    status: row.status,
+    notes: row.notes,
+    occurred_at: row.occurred_at,
+    created_at: row.created_at,
+    table: row.table_number != null ? { id: row.table_id, table_number: row.table_number } : null,
+    occupant: row.occupant_id ? { id: row.occupant_id, full_name: row.occupant_name } : null
   };
 }
 
-function since(range) {
-  const now = Date.now();
-  if (range === "today") return new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
-  if (range === "7d") return new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
-  if (range === "30d") return new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
-  return null;
+// Checks every field that may be sent when creating or editing an incident.
+// With partial=true, missing fields are left undefined (= not changed).
+function readIncidentFields(body, { partial }) {
+  const has = field => body[field] !== undefined;
+  const fields = {};
+  if (!partial || has("category")) fields.category = check.oneOf(body.category, "Category", ML_CATEGORIES);
+  if (!partial || has("db_level")) fields.db_level = check.number(body.db_level, "dB level", { min: 0, max: 200 });
+  if (!partial || has("confidence")) fields.confidence = check.optionalNumber(body.confidence, "Confidence", { min: 0, max: 1 });
+  if (!partial || has("duration_seconds")) {
+    fields.duration_seconds = check.optionalNumber(body.duration_seconds, "Duration", { min: 0, max: 86400, integer: true });
+  }
+  if (has("bulb_triggered")) fields.bulb_triggered = check.boolean(body.bulb_triggered, "Bulb triggered");
+  else if (!partial) fields.bulb_triggered = false;
+  if (has("status")) fields.status = check.oneOf(body.status, "Status", INCIDENT_STATUSES);
+  else if (!partial) fields.status = "CONFIRMED";
+  if (has("notes")) fields.notes = check.optionalText(body.notes, "Notes", { max: 1000 });
+  else if (!partial) fields.notes = "";
+  if (has("occurred_at")) fields.occurred_at = check.optionalDateTime(body.occurred_at, "Occurred at") ?? undefined;
+  return fields;
 }
 
-export async function listIncidents(params = {}) {
-  const incidents = await incidentsModel.findAll({
-    table_id: params.table_id ? Number(params.table_id) : null,
-    since: since(params.range)
+export async function listIncidents(query = {}) {
+  const rows = await incidentsModel.findAll({
+    table_id: check.optionalId(query.table_id, "table_id"),
+    ...check.dateRange(query)
   });
-  return Promise.all(incidents.map(serializeIncident));
+  return rows.map(serializeIncident);
 }
 
 export async function getIncident(id) {
-  const incident = await incidentsModel.findById(Number(id));
-  if (!incident) throw notFound("Incident not found.");
-  return serializeIncident(incident);
+  const row = await incidentsModel.findById(check.id(id, "Incident id"));
+  if (!row) throw notFound("Incident not found.");
+  return serializeIncident(row);
 }
 
-export async function createIncident(payload) {
-  const { table_id, category, db_level, confidence = null, occupant_id = null, duration_seconds = null, bulb_triggered = false, status = "CONFIRMED", notes = "", occurred_at } = payload;
-  if (!table_id || !category || db_level == null) throw badRequest("table_id, category, and db_level are required.");
+/**
+ * Creates an incident and (inside the same transaction) the occupant's
+ * violation and ban if this was their 3rd strike. Used by the REST API and
+ * by the telemetry confirmation engine.
+ */
+export async function createIncident(body = {}) {
+  const tableId = check.id(body.table_id, "Table");
+  const fields = readIncidentFields(body, { partial: false });
 
-  const table = await tablesModel.findById(Number(table_id));
+  const table = await tablesModel.findById(tableId);
   if (!table) throw notFound("Table not found.");
 
-  const resolvedOccupantId = occupant_id
-    ? Number(occupant_id)
-    : (await tableAssignmentsModel.activeForTable(Number(table_id)))?.occupant_id ?? null;
+  // No occupant given: blame whoever is assigned to the table right now.
+  let occupantId = check.optionalId(body.occupant_id, "Occupant");
+  if (occupantId) {
+    if (!await occupantsModel.findById(occupantId)) throw notFound("Occupant not found.");
+  } else {
+    occupantId = (await tableAssignmentsModel.activeForTable(tableId))?.occupant_id ?? null;
+  }
 
-  const incident = await withTransaction(async client => {
-    const created = await incidentsModel.create(
-      {
-        table_id: Number(table_id),
-        occupant_id: resolvedOccupantId,
-        category,
-        db_level: Number(db_level),
-        confidence: confidence != null ? Number(confidence) : null,
-        duration_seconds: duration_seconds != null ? Number(duration_seconds) : null,
-        bulb_triggered: Boolean(bulb_triggered),
-        status,
-        notes,
-        occurred_at: occurred_at ? new Date(occurred_at).toISOString() : new Date().toISOString()
-      },
+  const created = await withTransaction(async client => {
+    // Lock the occupant first (before the insert) so two incidents for the
+    // same person wait for each other instead of deadlocking.
+    if (occupantId) await occupantsModel.findByIdForUpdate(occupantId, client);
+    const incident = await incidentsModel.create(
+      { ...fields, table_id: tableId, occupant_id: occupantId, occurred_at: fields.occurred_at || new Date().toISOString() },
       client
     );
-    await recordViolationIfApplicable(created, client);
-    return created;
+    await recordViolationIfApplicable(incident, client);
+    return incident;
   });
 
-  return serializeIncident(incident);
+  return getIncident(created.id);
 }
 
-export async function updateIncident(id, payload) {
-  const existing = await incidentsModel.findById(Number(id));
+/** Editing the status also adds or removes the matching violation. */
+export async function updateIncident(id, body = {}) {
+  const incidentId = check.id(id, "Incident id");
+  const existing = await incidentsModel.findById(incidentId);
   if (!existing) throw notFound("Incident not found.");
-  const updated = await incidentsModel.update(existing.id, payload);
-  return serializeIncident(updated);
+  const fields = readIncidentFields(body, { partial: true });
+
+  await withTransaction(async client => {
+    if (existing.occupant_id) await occupantsModel.findByIdForUpdate(existing.occupant_id, client);
+    const updated = await incidentsModel.update(incidentId, fields, client);
+    if (existing.status === "CONFIRMED" && updated.status !== "CONFIRMED") await removeViolationForIncident(incidentId, client);
+    if (existing.status !== "CONFIRMED" && updated.status === "CONFIRMED") await recordViolationIfApplicable(updated, client);
+  });
+
+  return getIncident(incidentId);
 }
 
 export async function deleteIncident(id) {
-  const removed = await incidentsModel.remove(Number(id));
+  const removed = await incidentsModel.remove(check.id(id, "Incident id"));
   if (!removed) throw notFound("Incident not found.");
 }

@@ -9,6 +9,6 @@ export const remove = asyncHandler(async (req, res) => {
   await occupantsService.deleteOccupant(req.params.id);
   res.status(204).end();
 });
-export const assign = asyncHandler(async (req, res) => res.json({ occupant: await occupantsService.assignOccupant(req.params.id, req.body.table_id) }));
+export const assign = asyncHandler(async (req, res) => res.json({ occupant: await occupantsService.assignOccupant(req.params.id, req.body?.table_id) }));
 export const release = asyncHandler(async (req, res) => res.json({ occupant: await occupantsService.releaseOccupant(req.params.id) }));
 export const violations = asyncHandler(async (req, res) => res.json({ violations: await occupantsService.occupantViolations(req.params.id) }));

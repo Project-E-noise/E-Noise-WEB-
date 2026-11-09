@@ -1,21 +1,16 @@
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import * as clientsModel from "../models/clientsModel.js";
-import * as occupantsModel from "../models/occupantsModel.js";
+import { BAN_VIOLATION_THRESHOLD } from "../data/constants.js";
 import { badRequest, forbidden, gone, notFound, unauthorized } from "../utils/errors.js";
-import { generateVerificationToken } from "../utils/tokens.js";
+import { generateVerificationToken, signSession } from "../utils/tokens.js";
+import * as check from "../utils/validate.js";
 import { sendVerificationEmail } from "./emailService.js";
+import { currentStrikes } from "./violationsService.js";
 
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function normalizeEmail(value) {
-  if (typeof value !== "string") throw badRequest("Enter a valid email address.");
-  const email = value.trim().toLowerCase();
-  if (!EMAIL_PATTERN.test(email) || email.length > 255) throw badRequest("Enter a valid email address.");
-  return email;
-}
+const BCRYPT_ROUNDS = 10;
+const DUMMY_HASH = bcrypt.hashSync("not-a-real-password", BCRYPT_ROUNDS);
 
 function verificationData() {
   return {
@@ -25,153 +20,136 @@ function verificationData() {
 }
 
 async function deliverVerification(email, token) {
-  const verifyUrl = `${env.clientUrl}/client/set-password?token=${token}`;
-  await sendVerificationEmail({ to: email, verifyUrl, clientSetup: true });
+  try {
+    await sendVerificationEmail({ to: email, verifyUrl: `${env.clientUrl}/client/set-password?token=${token}`, clientSetup: true });
+  } catch (error) {
+    // Don't tell the user: the response is the same whether or not the address exists.
+    console.error("[clientService] Setup email failed:", error.message);
+  }
 }
 
-export async function register(payload = {}) {
-  const email = normalizeEmail(payload.email);
-  if (typeof payload.full_name !== "string" || !payload.full_name.trim()) throw badRequest("Full name is required.");
-  const full_name = payload.full_name.trim();
-  if (full_name.length > 100) throw badRequest("Name must be 100 characters or fewer.");
-  const contact = validateContact(payload.contact ?? "");
-  const generic = registrationResponse();
-  const existing = await clientsModel.findByEmail(email);
-  if (existing?.email_verified) return generic;
+function isExpired(client) {
+  return !client.verification_token_expires_at || new Date(client.verification_token_expires_at).getTime() <= Date.now();
+}
 
+// Registration never reveals whether an email is already registered.
+export async function register(body = {}) {
+  const email = check.email(body.email);
+  const full_name = check.text(body.full_name, "Full name", { max: 100 });
+  const contact = check.optionalText(body.contact, "Contact", { max: 100 });
+  const generic = { message: "If this address can receive a setup email, instructions have been sent." };
+
+  const existing = await clientsModel.findByEmail(email);
+  if (existing?.email_verified && existing.password_hash) return generic;
+
+  // Existing occupant records (added by an admin) only get a fresh token;
+  // their name and contact are not changed by a stranger registering.
   const verification = verificationData();
   const client = existing
     ? await clientsModel.updateVerification(existing.id, verification)
     : await clientsModel.createPending({ full_name, email, contact, ...verification });
-  try {
-    await deliverVerification(email, client.verification_token);
-  } catch (error) {
-    console.error("[clientService] Verification email failed", error);
-  }
+  await deliverVerification(email, client.verification_token);
   return generic;
-}
-
-function registrationResponse() {
-  return { message: "If this address can receive a setup email, instructions have been sent." };
 }
 
 export async function resendVerification(value) {
   const generic = { message: "If that account needs verification, a new email has been sent." };
-  let email;
-  try { email = normalizeEmail(value); } catch { return generic; }
+  if (typeof value !== "string" || !check.EMAIL_PATTERN.test(value.trim())) return generic;
+  const email = value.trim().toLowerCase();
+
   const client = await clientsModel.findByEmail(email);
   if (!client || (client.email_verified && client.password_hash)) return generic;
-  const verification = verificationData();
-  const updated = await clientsModel.updateVerification(client.id, verification);
-  try { await deliverVerification(email, updated.verification_token); }
-  catch (error) { console.error("[clientService] Verification resend failed", error); }
+  const updated = await clientsModel.updateVerification(client.id, verificationData());
+  await deliverVerification(email, updated.verification_token);
   return generic;
 }
 
+/** Checks a setup link without using it up. */
 export async function verify(token) {
-  if (!token) throw notFound("This verification link is invalid.");
+  if (typeof token !== "string" || !token) throw notFound("This setup link is invalid.");
   const client = await clientsModel.byVerificationToken(token);
-  if (!client) throw notFound("This verification link is invalid.");
-  if (!client.verification_token_expires_at || new Date(client.verification_token_expires_at).getTime() <= Date.now()) throw gone("This verification link has expired.");
+  if (!client || (client.email_verified && client.password_hash)) throw notFound("This setup link is invalid.");
+  if (isExpired(client)) throw gone("This setup link has expired.");
   return { valid: true };
 }
 
-export async function setPassword({ token, password } = {}) {
+export async function setPassword(body = {}) {
+  const { token } = body;
   if (typeof token !== "string" || !token) throw notFound("This setup link is invalid.");
   const client = await clientsModel.byVerificationToken(token);
-  if (!client) throw notFound("This setup link is invalid.");
-  if (!client.verification_token_expires_at || new Date(client.verification_token_expires_at).getTime() <= Date.now()) throw gone("This setup link has expired.");
-  if (client.email_verified && client.password_hash) throw notFound("This setup link is invalid.");
-  if (typeof password !== "string" || password.length < 8) throw badRequest("Password must be at least 8 characters.");
-  if (Buffer.byteLength(password, "utf8") > 72) throw badRequest("Password must be 72 bytes or fewer.");
+  if (!client || (client.email_verified && client.password_hash)) throw notFound("This setup link is invalid.");
+  if (isExpired(client)) throw gone("This setup link has expired.");
+  const newPassword = check.password(body.password);
 
-  const password_hash = await bcrypt.hash(password, 10);
-  const updated = await clientsModel.setPasswordForToken(token, password_hash);
-  if (!updated) {
-    const current = await clientsModel.byVerificationToken(token);
-    if (current?.verification_token_expires_at && new Date(current.verification_token_expires_at).getTime() <= Date.now()) throw gone("This setup link has expired.");
-    throw notFound("This setup link is invalid.");
-  }
+  const updated = await clientsModel.setPasswordForToken(token, await bcrypt.hash(newPassword, BCRYPT_ROUNDS));
+  // The link was used or expired between the checks above and the update.
+  if (!updated) throw notFound("This setup link is invalid.");
   return { message: "Password set. You may now sign in." };
 }
 
-export async function login({ email: rawEmail, password }) {
-  const email = normalizeEmail(rawEmail || "");
+export async function login(body = {}) {
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  if (!email || !password) throw badRequest("Enter your email and password.");
+
   const client = await clientsModel.findByEmail(email);
-  if (!client?.password_hash || !await bcrypt.compare(password || "", client.password_hash)) throw unauthorized("Invalid email or password.");
+  const matches = await bcrypt.compare(password, client?.password_hash || DUMMY_HASH);
+  if (!client?.password_hash || !matches) throw unauthorized("Invalid email or password.");
   if (!client.is_active) throw forbidden("This account is inactive.");
   if (!client.email_verified) throw forbidden("Email verification required.");
-  return {
-    token: jwt.sign({ sub: client.id, role: "client" }, env.jwtSecret, { expiresIn: env.jwtExpiresIn }),
-    client: clientsModel.publicClient(client)
-  };
+  return { token: signSession(client.id, "client"), client: clientsModel.publicClient(client) };
 }
 
-export function profile(client) { return client; }
+export function profile(client) {
+  return client;
+}
 
-export async function updateProfile(id, payload = {}) {
+export async function updateProfile(id, body = {}) {
   const current = await clientsModel.findById(id);
   if (!current) throw notFound("Client profile not found.");
-  let full_name = current.full_name;
-  if (payload.full_name !== undefined) {
-    if (typeof payload.full_name !== "string") throw badRequest("Name must be text.");
-    full_name = payload.full_name.trim();
-    if (!full_name) throw badRequest("Name is required.");
-    if (full_name.length > 100) throw badRequest("Name must be 100 characters or fewer.");
-  }
-  const contact = payload.contact === undefined ? (current.contact || "") : validateContact(payload.contact);
+  const full_name = body.full_name === undefined ? current.full_name : check.text(body.full_name, "Name", { max: 100 });
+  const contact = body.contact === undefined ? (current.contact || "") : check.optionalText(body.contact, "Contact", { max: 100 });
   return clientsModel.publicClient(await clientsModel.update(id, { full_name, contact }));
 }
 
-function validateContact(contact) {
-  if (typeof contact !== "string") throw badRequest("Contact must be text.");
-  const value = contact.trim();
-  if (value.length > 100) throw badRequest("Contact must be 100 characters or fewer.");
-  return value;
-}
-
-export async function changePassword(id, { current_password, new_password } = {}) {
+export async function changePassword(id, body = {}) {
   const client = await clientsModel.findById(id);
-  if (!client || !await bcrypt.compare(current_password || "", client.password_hash || "")) throw badRequest("Current password is incorrect.");
-  if (typeof new_password !== "string" || new_password.length < 8) throw badRequest("Password must be at least 8 characters.");
-  if (new_password === current_password) throw badRequest("New password must differ from the current password.");
-  await clientsModel.update(id, { full_name: client.full_name, contact: client.contact || "", password_hash: await bcrypt.hash(new_password, 10) });
+  if (!client || !await bcrypt.compare(String(body.current_password || ""), client.password_hash || DUMMY_HASH)) {
+    throw badRequest("Current password is incorrect.");
+  }
+  const newPassword = check.password(body.new_password, "New password");
+  if (newPassword === body.current_password) throw badRequest("New password must differ from the current password.");
+  await clientsModel.update(id, { full_name: client.full_name, contact: client.contact || "", password_hash: await bcrypt.hash(newPassword, BCRYPT_ROUNDS) });
   return { message: "Password updated." };
 }
 
-function parseDate(value, field) {
-  if (value == null || value === "") return null;
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw badRequest(`${field} must use YYYY-MM-DD.`);
-  const date = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) throw badRequest(`${field} must be a valid date.`);
-  return date;
-}
-
-function queryOptions(query = {}) {
-  const fromDate = parseDate(query.from, "from");
-  const toDate = parseDate(query.to, "to");
-  if (fromDate && toDate && fromDate > toDate) throw badRequest("from must be on or before to.");
-  const from = fromDate?.toISOString() || null;
-  const to = toDate ? new Date(toDate.getTime() + 24 * 60 * 60 * 1000).toISOString() : null;
-  const limitValue = Number(query.limit);
-  const offsetValue = Number(query.offset);
-  return { from, to, limit: Math.min(Math.max(Number.isInteger(limitValue) && limitValue > 0 ? limitValue : 20, 1), 100), offset: Math.max(Number.isInteger(offsetValue) && offsetValue >= 0 ? offsetValue : 0, 0) };
+function listOptions(query = {}) {
+  return { ...check.dateRange({ from: query.from, to: query.to }), ...check.paging(query) };
 }
 
 export async function logs(id, query) {
-  const options = queryOptions(query);
+  const options = listOptions(query);
   const [items, total] = await Promise.all([clientsModel.logs(id, options), clientsModel.logCount(id, options)]);
   return { items, total, limit: options.limit, offset: options.offset };
 }
 
 export async function violations(id, query) {
-  const options = queryOptions(query);
-  const [items, total, current_violation_count, occupant] = await Promise.all([
+  const options = listOptions(query);
+  const client = await clientsModel.findById(id);
+  const [items, total, strikes] = await Promise.all([
     clientsModel.violations(id, options),
     clientsModel.filteredViolationCount(id, options),
-    clientsModel.currentViolationCount(id),
-    occupantsModel.findById(id)
+    currentStrikes(client)
   ]);
-  const is_banned = occupant?.status === "BANNED" && occupant.ban_until && new Date(occupant.ban_until).getTime() > Date.now();
-  return { items, total, current_violation_count, limit: 3, is_banned: Boolean(is_banned), ban_until: is_banned ? occupant.ban_until : null, page_limit: options.limit, offset: options.offset };
+  const is_banned = client?.status === "BANNED";
+  return {
+    items,
+    total,
+    current_violation_count: strikes,
+    limit: BAN_VIOLATION_THRESHOLD,
+    is_banned,
+    ban_until: is_banned ? client.ban_until : null,
+    page_limit: options.limit,
+    offset: options.offset
+  };
 }
