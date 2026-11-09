@@ -12,6 +12,7 @@
 // Usage (from server/):
 //   npm run simulate                          # NODE-001, gentle random walk
 //   npm run simulate -- --node NODE-002 --spike   # walk up into a confirmed critical event
+//   npm run simulate -- --spike --seconds 40       # stop by itself after 40 seconds
 //
 import mqtt from "mqtt";
 import dotenv from "dotenv";
@@ -22,6 +23,7 @@ dotenv.config();
 const args = process.argv.slice(2);
 const nodeId = argOf("--node") || "NODE-001";
 const doSpike = args.includes("--spike");
+const stopAfterSeconds = Number(argOf("--seconds")) || 0;
 
 function argOf(flag) {
   const i = args.indexOf(flag);
@@ -67,13 +69,17 @@ client.on("connect", () => {
     console.log(`[simulate] ${nodeId} -> ${payload.db_level} dB (${payload.classification})`);
   }, 1000);
 
-  process.on("SIGINT", () => {
+  // Say "offline" (like a real device's Last Will) and disconnect.
+  const stop = () => {
     clearInterval(interval);
     client.publish(statusTopic(nodeId), JSON.stringify({ online: false }), { qos: 1, retain: true }, () => {
       client.end();
       process.exit(0);
     });
-  });
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  if (stopAfterSeconds > 0) setTimeout(stop, stopAfterSeconds * 1000);
 });
 
 client.on("error", err => {
