@@ -24,7 +24,7 @@ export function Sidebar({ id, tablesOnline, tablesTotal, onClose }) {
           <div key={section.group}>
             <div className="nav-grp">{section.group}</div>
             {section.items.map(item => (
-              <NavLink key={item.to} to={item.to} className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
+              <NavLink key={item.to} to={item.to} onClick={onClose} className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
                 <i className={`ti ${item.icon}`} aria-hidden="true" /> {item.label}
               </NavLink>
             ))}

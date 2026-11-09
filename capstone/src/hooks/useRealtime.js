@@ -116,7 +116,15 @@ export function useRealtime({ fetcher, onData, interval = 5000, enabled = true }
       stopPolling();
       clearTimeout(debounceTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      socket?.close();
+      if (socket?.readyState === WebSocket.CONNECTING) {
+        // Closing a socket that is still connecting prints a browser warning
+        // (happens in development, where React runs effects twice). Close it once it opens.
+        socket.onopen = () => socket.close();
+        socket.onclose = null;
+        socket.onerror = null;
+      } else {
+        socket?.close();
+      }
     };
   }, [enabled, interval]);
 
