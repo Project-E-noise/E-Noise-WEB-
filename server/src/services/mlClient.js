@@ -1,4 +1,5 @@
 import { env } from "../config/env.js";
+import { ML_CATEGORIES } from "../data/constants.js";
 
 // Thin HTTP client for the Phase 7 Python ML microservice (ml-service/,
 // YAMNet loaded via TensorFlow Hub). The Node backend never runs inference
@@ -14,10 +15,15 @@ import { env } from "../config/env.js";
  */
 export async function classifyAudioClip(wavBuffer) {
   try {
+    const headers = { "Content-Type": "audio/wav" };
+    // The hosted ML service (Hugging Face Space) is public, so it checks this shared secret.
+    if (env.mlApiKey) headers["X-API-Key"] = env.mlApiKey;
     const res = await fetch(`${env.mlServiceUrl}/classify`, {
       method: "POST",
-      headers: { "Content-Type": "audio/wav" },
-      body: wavBuffer
+      headers,
+      body: wavBuffer,
+      // A sleeping Space can take a while to wake up; don't hang forever.
+      signal: AbortSignal.timeout(15000)
     });
 
     if (!res.ok) {
@@ -26,7 +32,7 @@ export async function classifyAudioClip(wavBuffer) {
     }
 
     const data = await res.json();
-    if (typeof data.category !== "string" || typeof data.confidence !== "number") {
+    if (!ML_CATEGORIES.includes(data.category) || typeof data.confidence !== "number" || data.confidence < 0 || data.confidence > 1) {
       console.warn("[ml-client] Unexpected response shape from ML service:", data);
       return null;
     }

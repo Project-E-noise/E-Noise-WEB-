@@ -1,5 +1,6 @@
 import pg from "pg";
 import { env } from "./env.js";
+import { pgConfig } from "./dbConfig.js";
 
 const { Pool } = pg;
 
@@ -13,9 +14,8 @@ if (!env.databaseUrl) {
 }
 
 export const pool = new Pool({
-  connectionString: env.databaseUrl || undefined,
-  // Small pool: this is a single-admin-dashboard backend, not a
-  // high-concurrency public API. Raise if load testing says otherwise.
+  ...pgConfig(env.databaseUrl, env.nodeEnv),
+  // Small pool: one study hub, a handful of admins. Neon free also limits connections.
   max: 10,
   idleTimeoutMillis: 30000
 });
@@ -23,7 +23,7 @@ export const pool = new Pool({
 pool.on("error", err => {
   // Errors on idle clients (e.g. dropped connections) must not crash the process.
   // eslint-disable-next-line no-console
-  console.error("[db] Unexpected error on idle client", err);
+  console.error("[db] Unexpected error on idle client:", err.message);
 });
 
 /** Run a single parameterized query against the pool. */

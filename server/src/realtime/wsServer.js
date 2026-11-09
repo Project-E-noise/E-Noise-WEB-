@@ -23,12 +23,22 @@ let wss = null;
 const clients = new Set();
 
 export function createWsServer(httpServer) {
-  wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  // The dashboard never sends large messages, so keep the limit small.
+  wss = new WebSocketServer({ server: httpServer, path: "/ws", maxPayload: 4 * 1024 });
 
   wss.on("connection", async (socket, request) => {
+    // Note: the token is in the URL, so it is never logged here.
     const url = new URL(request.url, "http://internal");
     const token = url.searchParams.get("token");
-    const result = await verifyAdminToken(token);
+    let result;
+    try {
+      result = await verifyAdminToken(token);
+    } catch (err) {
+      // e.g. the database is unreachable: close instead of crashing the process.
+      console.error("[ws] Could not check token:", err.message);
+      socket.close(1011, "server error");
+      return;
+    }
 
     if (!result.ok) {
       // 4001: app-defined close code for "auth failed" — distinct from the

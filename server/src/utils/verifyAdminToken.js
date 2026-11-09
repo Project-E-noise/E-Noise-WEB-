@@ -1,30 +1,21 @@
-import jwt from "jsonwebtoken";
-import { env } from "../config/env.js";
 import * as adminsModel from "../models/adminsModel.js";
-import { publicAdmin } from "../services/authService.js";
+import { readSession } from "./tokens.js";
 
 /**
- * Verifies a Bearer JWT the same way for both the REST auth middleware and
- * the WebSocket handshake, so "who's allowed in" never drifts between the
- * two. Returns { ok: true, admin } on success, or { ok: false, reason }
- * where reason is "invalid" | "not_found" | "disabled" | "unverified" —
- * callers decide how to turn that into an HTTP status vs. a closed socket.
+ * Checks an admin JWT. Used by both the REST middleware and the WebSocket
+ * handshake so the rules are the same in both places.
+ * Returns { ok: true, admin } or { ok: false, reason } where reason is
+ * "invalid" | "wrong_role" | "not_found" | "disabled" | "unverified".
  */
 export async function verifyAdminToken(token) {
-  if (!token) return { ok: false, reason: "invalid" };
-
-  let payload;
-  try {
-    payload = jwt.verify(token, env.jwtSecret);
-  } catch {
-    return { ok: false, reason: "invalid" };
-  }
-  if (payload.role === "client") return { ok: false, reason: "wrong_role" };
+  const payload = readSession(token);
+  if (!payload) return { ok: false, reason: "invalid" };
+  if (payload.role !== "admin") return { ok: false, reason: "wrong_role" };
 
   const admin = await adminsModel.findById(payload.sub);
   if (!admin) return { ok: false, reason: "not_found" };
   if (admin.status === "DISABLED") return { ok: false, reason: "disabled" };
   if (!admin.is_verified) return { ok: false, reason: "unverified" };
 
-  return { ok: true, admin: publicAdmin(admin) };
+  return { ok: true, admin: adminsModel.publicAdmin(admin) };
 }

@@ -1,3 +1,5 @@
+// An error with an HTTP status. Services throw these; the error handler
+// turns them into `{ error: "message" }` responses.
 export class ApiError extends Error {
   constructor(status, message, details) {
     super(message);
@@ -6,7 +8,7 @@ export class ApiError extends Error {
   }
 }
 
-export const badRequest = (message, details) => new ApiError(400, message, details);
+export const badRequest = (message, details) => new ApiError(400, message || "Invalid request.", details);
 export const unauthorized = message => new ApiError(401, message || "Authentication required.");
 export const forbidden = message => new ApiError(403, message || "Not allowed.");
 export const notFound = message => new ApiError(404, message || "Not found.");

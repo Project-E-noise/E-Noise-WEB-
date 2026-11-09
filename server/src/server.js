@@ -1,24 +1,36 @@
 import http from "http";
 import { app } from "./app.js";
 import { env } from "./config/env.js";
+import { pool } from "./config/db.js";
 import { createWsServer } from "./realtime/wsServer.js";
-import { connectMqtt } from "./mqtt/mqttClient.js";
+import { connectMqtt, disconnectMqtt } from "./mqtt/mqttClient.js";
 
-// A plain http.Server wraps the Express app so the WebSocket server (Phase 6)
-// can share the exact same port via an upgrade handler at /ws — no second
-// port, no separate process, nothing extra to expose through a firewall or
-// reverse proxy beyond what's already open for the REST API.
+// The WebSocket server shares the same HTTP server and port as the REST
+// API (at /ws), so only one port needs to be open.
 const server = http.createServer(app);
-createWsServer(server);
+const wss = createWsServer(server);
 
 server.listen(env.port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`[server] Project E-Noise API listening on http://localhost:${env.port}`);
-  // eslint-disable-next-line no-console
-  console.log(`[server] WebSocket real-time feed at ws://localhost:${env.port}/ws`);
-  // eslint-disable-next-line no-console
-  console.log(`[server] Allowing requests from ${env.corsOrigin}`);
+  console.log(`[server] Project E-Noise API (${env.nodeEnv}) listening on port ${env.port}`);
+  console.log(`[server] WebSocket at /ws. Allowed origins: ${env.corsOrigins.join(", ")}`);
 });
 
-// Starts (or skips, with a warning) MQTT ingestion from ESP32 nodes.
+// Starts MQTT ingestion from the sensor nodes (or skips it with a warning).
 connectMqtt();
+
+// Render sends SIGTERM before stopping or redeploying the service. Close
+// connections cleanly so MQTT and Postgres don't keep half-open sessions.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[server] ${signal} received, shutting down...`);
+  setTimeout(() => process.exit(0), 5000).unref();
+  wss.clients.forEach(socket => socket.close(1001, "server restarting"));
+  server.close();
+  await disconnectMqtt();
+  await pool.end().catch(() => {});
+  process.exit(0);
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

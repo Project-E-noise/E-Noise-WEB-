@@ -16,6 +16,20 @@ import { ingestTelemetry, ingestStatus, ingestAudioClip } from "../services/tele
 
 let client = null;
 
+// Messages from the same node are handled one after another (in order), so
+// the confirmation rule never runs twice at once for one table. Different
+// nodes still run in parallel.
+const nodeQueues = new Map();
+function runInOrder(nodeId, task) {
+  const previous = nodeQueues.get(nodeId) || Promise.resolve();
+  const next = previous.then(task).catch(err => console.error(`[mqtt] Failed to process message from ${nodeId}:`, err.message));
+  nodeQueues.set(nodeId, next);
+  next.finally(() => {
+    if (nodeQueues.get(nodeId) === next) nodeQueues.delete(nodeId);
+  });
+  return next;
+}
+
 /**
  * Connects to HiveMQ Cloud over TLS and subscribes to every node's
  * telemetry/status topics. If HIVEMQ_HOST isn't configured (no hardware
@@ -35,7 +49,7 @@ export function connectMqtt() {
     // Defaults to TLS (HiveMQ Cloud). MQTT_PROTOCOL=mqtt lets local testing
     // point at a plain, non-TLS broker (e.g. a local Mosquitto instance)
     // without touching the production HiveMQ Cloud path.
-    protocol: process.env.MQTT_PROTOCOL || "mqtts",
+    protocol: env.hivemq.protocol,
     username: env.hivemq.username || undefined,
     password: env.hivemq.password || undefined,
     clientId: `enoise-backend-${Math.random().toString(16).slice(2, 10)}`,
@@ -57,34 +71,32 @@ export function connectMqtt() {
   client.on("error", err => console.error("[mqtt] Connection error:", err.message));
   client.on("offline", () => console.warn("[mqtt] Broker connection offline."));
 
-  client.on("message", async (topic, payload) => {
+  client.on("message", (topic, payload) => {
     const nodeId = nodeIdFromTopic(topic);
     if (!nodeId) return;
 
-    try {
-      if (topic.endsWith("/telemetry")) {
-        const parsed = parseTelemetry(payload);
-        if (parsed.error) return console.warn(`[mqtt] Bad telemetry from ${nodeId}: ${parsed.error}`);
-        await ingestTelemetry(nodeId, parsed);
-      } else if (topic.endsWith("/status")) {
-        const parsed = parseStatus(payload);
-        if (parsed.error) return console.warn(`[mqtt] Bad status from ${nodeId}: ${parsed.error}`);
-        await ingestStatus(nodeId, parsed);
-      } else if (topic.endsWith("/audio")) {
-        // Binary WAV payload, not JSON — passed straight through to the
-        // classifier. See topics.js's isLikelyWav doc comment: this buffer
-        // is only ever held in memory, never written to disk or the DB.
-        await ingestAudioClip(nodeId, payload);
-      }
-    } catch (err) {
-      // A single malformed/unexpected message must never crash the broker
-      // connection — log and keep listening for the next one.
-      // eslint-disable-next-line no-console
-      console.error(`[mqtt] Failed to process message on ${topic}:`, err.message);
+    if (topic.endsWith("/telemetry")) {
+      const parsed = parseTelemetry(payload);
+      if (parsed.error) return console.warn(`[mqtt] Bad telemetry from ${nodeId}: ${parsed.error}`);
+      runInOrder(nodeId, () => ingestTelemetry(nodeId, parsed));
+    } else if (topic.endsWith("/status")) {
+      const parsed = parseStatus(payload);
+      if (parsed.error) return console.warn(`[mqtt] Bad status from ${nodeId}: ${parsed.error}`);
+      runInOrder(nodeId, () => ingestStatus(nodeId, parsed));
+    } else if (topic.endsWith("/audio")) {
+      // Binary WAV clip. Classification can take seconds (or the ML
+      // service may be asleep), so it does not hold up the telemetry queue.
+      // The buffer only lives in memory; it is never written to disk.
+      ingestAudioClip(nodeId, payload).catch(err => console.error(`[mqtt] Audio from ${nodeId} failed:`, err.message));
     }
   });
 
   return client;
+}
+
+/** Closes the broker connection (used on shutdown). */
+export function disconnectMqtt() {
+  return new Promise(resolve => (client ? client.end(false, {}, resolve) : resolve()));
 }
 
 /**
