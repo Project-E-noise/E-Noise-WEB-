@@ -30,3 +30,9 @@ Thumbs.db
 
 # Editor configuration can contain machine-specific paths
 **/.vscode/
+
+# Firmware credentials (copy secrets.example.h to secrets.h)
+firmware/**/secrets.h
+
+# Arduino IDE build cache
+firmware/**/build/
