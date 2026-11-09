@@ -14,6 +14,8 @@ export const login = asyncHandler(async (req, res) => {
 export const me = asyncHandler(async (req, res) => {
   res.json({ admin: req.admin });
 });
+export const updateProfile = asyncHandler(async (req,res)=>res.json({admin:await authService.updateAdminProfile(req.admin.id,req.body)}));
+export const changePassword = asyncHandler(async (req,res)=>res.json(await authService.changeAdminPassword(req.admin.id,req.body)));
 
 export const logout = asyncHandler(async (req, res) => {
   // Stateless JWTs: nothing to invalidate server-side. A future phase could

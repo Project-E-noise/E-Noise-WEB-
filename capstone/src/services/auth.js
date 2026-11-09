@@ -6,5 +6,7 @@ export const authApi = {
   me: () => apiClient.get("/api/auth/me"),
   logout: () => apiClient.post("/api/auth/logout", {}),
   verifyEmail: token => apiClient.get(`/api/auth/verify-email${toQueryString({ token })}`, { auth: false }),
-  resendVerification: email => apiClient.post("/api/auth/resend-verification", { email }, { auth: false })
+  resendVerification: email => apiClient.post("/api/auth/resend-verification", { email }, { auth: false }),
+  updateProfile: payload => apiClient.patch("/api/auth/me", payload),
+  changePassword: payload => apiClient.post("/api/auth/change-password", payload)
 };

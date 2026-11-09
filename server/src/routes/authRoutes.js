@@ -9,6 +9,8 @@ router.post("/login", authController.login);
 router.get("/verify-email", authController.verifyEmail);
 router.post("/resend-verification", authController.resendVerification);
 router.get("/me", requireAuth, authController.me);
+router.patch("/me", requireAuth, authController.updateProfile);
+router.post("/change-password", requireAuth, authController.changePassword);
 router.post("/logout", requireAuth, authController.logout);
 
 export default router;

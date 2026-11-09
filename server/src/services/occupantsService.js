@@ -26,18 +26,31 @@ export async function getOccupant(id) {
   return serializeOccupant(occupant);
 }
 
-export async function createOccupant({ full_name }) {
+export async function createOccupant({ full_name, email, contact }) {
   if (!full_name || !full_name.trim()) throw badRequest("full_name is required.");
-  const occupant = await occupantsModel.create({ full_name: full_name.trim() });
+  if (email != null && email !== "" && (typeof email !== "string" || email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))) throw badRequest("email must be a valid email address.");
+  if (contact != null && (typeof contact !== "string" || contact.length > 100)) throw badRequest("contact must be 100 characters or fewer.");
+  const normalizedEmail = email === undefined || email === "" ? null : String(email).trim().toLowerCase();
+  if (normalizedEmail && await occupantsModel.findByEmail(normalizedEmail)) throw conflict("An occupant with that email already exists.");
+  const occupant = await occupantsModel.create({ full_name: full_name.trim(), email: normalizedEmail, contact: contact ?? "" });
   return serializeOccupant(occupant);
 }
 
 export async function updateOccupant(id, payload) {
   const occupant = await occupantsModel.findById(Number(id));
   if (!occupant) throw notFound("Occupant not found.");
+  const email = payload.email === undefined ? undefined : (payload.email === "" ? null : String(payload.email).trim().toLowerCase());
+  if (email && (email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw badRequest("email must be a valid email address.");
+  if (payload.contact !== undefined && (typeof payload.contact !== "string" || payload.contact.length > 100)) throw badRequest("contact must be 100 characters or fewer.");
+  if (email) {
+    const matching = await occupantsModel.findByEmail(email);
+    if (matching && matching.id !== occupant.id) throw conflict("An occupant with that email already exists.");
+  }
   const updated = await occupantsModel.update(occupant.id, {
     full_name: payload.full_name !== undefined ? payload.full_name.trim() : undefined,
-    status: payload.status !== undefined ? payload.status : undefined
+    status: payload.status !== undefined ? payload.status : undefined,
+    email,
+    contact: payload.contact !== undefined ? payload.contact : undefined
   });
   return serializeOccupant(updated);
 }

@@ -17,15 +17,27 @@ import Thresholds from "./pages/Thresholds";
 import TableConfiguration from "./pages/TableConfiguration";
 import DataExport from "./pages/DataExport";
 import AdminProfile from "./pages/AdminProfile";
+import { ClientLogin, ClientRegister, ClientVerify } from "./pages/ClientAuth";
+import ClientSetPassword from "./pages/ClientSetPassword";
+import ClientDashboard from "./pages/ClientDashboard";
+import ClientLogs from "./pages/ClientLogs";
+import ClientViolations from "./pages/ClientViolations";
+import ClientProfile from "./pages/ClientProfile";
+import ClientLayout from "./components/layout/ClientLayout";
+import { PublicOnly } from "./components/auth/PublicOnly";
 
 export default function App() {
   return (
     <AuthProvider>
       <ToastProvider>
         <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+          <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+          <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
           <Route path="/verify-email" element={<VerifyEmail />} />
+          <Route path="/client/login" element={<PublicOnly><ClientLogin /></PublicOnly>} />
+          <Route path="/client/register" element={<PublicOnly><ClientRegister /></PublicOnly>} />
+          <Route path="/client/verify-email" element={<ClientVerify />} />
+          <Route path="/client/set-password" element={<ClientSetPassword />} />
 
           <Route
             element={
@@ -45,6 +57,12 @@ export default function App() {
             <Route path="/table-configuration" element={<TableConfiguration />} />
             <Route path="/export" element={<DataExport />} />
             <Route path="/profile" element={<AdminProfile />} />
+          </Route>
+          <Route element={<ProtectedRoute role="client"><ClientLayout /></ProtectedRoute>}>
+            <Route path="/client/dashboard" element={<ClientDashboard />} />
+            <Route path="/client/logs" element={<ClientLogs />} />
+            <Route path="/client/violations" element={<ClientViolations />} />
+            <Route path="/client/profile" element={<ClientProfile />} />
           </Route>
 
           <Route path="/" element={<Navigate to="/overview" replace />} />

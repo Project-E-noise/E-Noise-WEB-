@@ -10,6 +10,15 @@ export async function findById(id) {
   return rows[0] || null;
 }
 
+export async function updateProfile(id, full_name) {
+  const { rows } = await query("UPDATE admins SET full_name=$2,updated_at=NOW() WHERE id=$1 RETURNING *", [id, full_name]);
+  return rows[0] || null;
+}
+
+export async function updatePassword(id, password_hash) {
+  await query("UPDATE admins SET password_hash=$2,updated_at=NOW() WHERE id=$1", [id, password_hash]);
+}
+
 export async function findByVerificationToken(token) {
   const { rows } = await query("SELECT * FROM admins WHERE verification_token = $1", [token]);
   return rows[0] || null;

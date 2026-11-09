@@ -21,10 +21,11 @@ export function computeLedCounts(dbLevel, table) {
   }
   if (dbLevel < critical) {
     const span = critical - warning || 1;
-    const yellow = Math.min(2, Math.max(1, Math.round(((dbLevel - warning) / span) * 2)));
+    // Yellow fills at warning, then at each one-third boundary; values exactly on a boundary enter the next step.
+    const yellow = Math.min(3, Math.max(1, Math.floor(((dbLevel - warning) / span) * 3) + 1));
     return { green: 5, yellow, red: 0 };
   }
-  return { green: 5, yellow: 2, red: 2 };
+  return { green: 5, yellow: 3, red: 2 };
 }
 
 export function computeStatus(dbLevel, table) {

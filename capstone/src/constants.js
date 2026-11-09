@@ -4,8 +4,8 @@
 // Exactly four ML sound categories — do not add or remove.
 export const ML_CATEGORIES = ["Loud Conversation", "Mobile Phone Noise", "Impact Noise", "Ambient Baseline"];
 
-// Final approved 10-indicator LED configuration: 5 green, 2 yellow, 2 red, 1 critical.
-export const LED_CONFIG = { green: 5, yellow: 2, red: 2, critical: 1 };
+// Physical LED configuration: 5 green, 3 yellow, 2 red, 1 critical.
+export const LED_CONFIG = { green: 5, yellow: 3, red: 2, critical: 1 };
 
 // Violations: one-week temporary ban after 3 violations (enforced by the backend;
 // the frontend only displays the backend-provided ban status).

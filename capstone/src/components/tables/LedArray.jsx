@@ -1,6 +1,6 @@
 import { LED_CONFIG } from "../../constants";
 
-// Renders the FINAL approved 5 green / 2 yellow / 2 red / 1 critical LED
+// Renders the 5 green / 3 yellow / 2 red / 1 critical LED
 // arrangement. States (inactive/active/blinking) come entirely from the
 // backend-provided led_state — this component never decides them itself.
 // led_state shape: { green: number, yellow: number, red: number, critical: boolean }

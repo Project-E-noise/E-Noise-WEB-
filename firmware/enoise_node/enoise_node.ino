@@ -6,7 +6,7 @@
  *   2. Publishes that reading over MQTT (TLS) to the backend, once per
  *      TELEMETRY_INTERVAL_MS.
  *   3. Subscribes to a backend-published LED command topic and drives the
- *      10-indicator LED array (5 green / 2 yellow / 2 red / 1 critical)
+ *      11-indicator LED array (5 green / 3 yellow / 2 red / 1 critical)
  *      to match it. The device NEVER decides the LED state itself — see
  *      "CRITICAL LED RULE" in the spec: the 10-second confirmation logic
  *      lives entirely in the backend (server/src/services/telemetryService.js).
@@ -31,9 +31,9 @@
  * Wiring:
  *   MAX9814 OUT -> GPIO34 (ADC1, input-only — safe during WiFi/BT use)
  *   MAX9814 VCC -> 3V3, GND -> GND, GAIN pin left floating (60dB gain)
- *   10 LEDs, each through a ~220-330 ohm resistor to GND, anodes to:
+ *   11 LEDs, each through a ~220-330 ohm resistor to GND, anodes to:
  *     Green:    GPIO 4, 5, 18, 19, 21
- *     Yellow:   GPIO 22, 23
+ *     Yellow:   GPIO 22, 23, 32
  *     Red:      GPIO 25, 26
  *     Critical: GPIO 27 (this one blinks — backend controls on/off, the
  *               blink animation itself is local so it doesn't depend on a
@@ -75,15 +75,16 @@ const unsigned long RECONNECT_BACKOFF_MS  = 3000;
 const uint32_t AUDIO_SAMPLE_RATE_HZ = 16000; // YAMNet's native input rate
 const uint32_t AUDIO_CLIP_SECONDS   = 1;
 const uint32_t AUDIO_NUM_SAMPLES    = AUDIO_SAMPLE_RATE_HZ * AUDIO_CLIP_SECONDS;
-const uint32_t MQTT_BUFFER_BYTES    = (AUDIO_NUM_SAMPLES * 2) + 100; // PCM16 + WAV header + margin
+const unsigned long LED_FAILSAFE_MS = 30000;
 
 // ---------------------------------------------------------------------
 // Pin map
 // ---------------------------------------------------------------------
 const int MIC_PIN = 34;
 
+// GPIO5 is a boot strapping pin; keep its LED load from forcing its reset-time strap level.
 const int GREEN_PINS[5]  = {4, 5, 18, 19, 21};
-const int YELLOW_PINS[2] = {22, 23};
+const int YELLOW_PINS[3] = {22, 23, 32};
 const int RED_PINS[2]    = {25, 26};
 const int CRITICAL_PIN   = 27;
 
@@ -111,6 +112,8 @@ bool ledCritical = false;
 unsigned long lastBlinkToggle = 0;
 bool blinkOn = false;
 unsigned long lastTelemetryAt = 0;
+unsigned long lastLedCommandAt = 0;
+bool ledFailsafeActive = false;
 volatile bool audioCaptureRequested = false;
 
 void setup() {
@@ -123,6 +126,9 @@ void setup() {
   audioTopic        = String("enoise/") + NODE_ID + "/audio";
 
   setupLedPins();
+  analogReadResolution(12); // Keep the microphone ADC scale explicit across core defaults.
+  analogSetPinAttenuation(MIC_PIN, ADC_11db); // Select the intended ESP32 input range explicitly.
+  lastLedCommandAt = millis();
   connectWifi();
 
   // NOTE: for a production deployment, pin the broker's CA certificate
@@ -132,10 +138,6 @@ void setup() {
   tlsClient.setInsecure();
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(onMqttMessage);
-  // Default PubSubClient buffer (256 bytes) is far too small for a WAV
-  // clip (~32 KB) — this is the single most common thing people forget
-  // when adding audio to an existing PubSubClient project.
-  mqtt.setBufferSize(MQTT_BUFFER_BYTES);
 }
 
 void loop() {
@@ -151,6 +153,7 @@ void loop() {
   }
 
   updateCriticalBlink();
+  updateLedFailsafe();
 
   unsigned long now = millis();
   if (now - lastTelemetryAt >= TELEMETRY_INTERVAL_MS) {
@@ -169,6 +172,10 @@ void connectWifi() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
+    // Keep MQTT and the critical indicator serviced during Wi-Fi retries.
+    if (mqtt.connected()) mqtt.loop();
+    updateCriticalBlink();
+    updateLedFailsafe();
     delay(250);
     Serial.print(".");
   }
@@ -181,6 +188,7 @@ void connectMqtt() {
   lastAttempt = millis();
 
   Serial.println("[mqtt] Connecting...");
+  randomSeed(esp_random()); // Seed each client ID from the ESP32 hardware RNG.
   String clientId = String("enoise-") + NODE_ID + "-" + String(random(0xffff), HEX);
 
   // Last Will: if this node drops off the network ungracefully, the broker
@@ -278,15 +286,17 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   }
 
   setLedRow(GREEN_PINS, 5, doc["green"] | 0);
-  setLedRow(YELLOW_PINS, 2, doc["yellow"] | 0);
+  setLedRow(YELLOW_PINS, 3, doc["yellow"] | 0);
   setLedRow(RED_PINS, 2, doc["red"] | 0);
   ledCritical = doc["critical"] | false;
   if (!ledCritical) digitalWrite(CRITICAL_PIN, LOW);
+  lastLedCommandAt = millis(); // A valid backend command renews the LED lease.
+  ledFailsafeActive = false;
 }
 
 void setupLedPins() {
   for (int i = 0; i < 5; i++) pinMode(GREEN_PINS[i], OUTPUT);
-  for (int i = 0; i < 2; i++) pinMode(YELLOW_PINS[i], OUTPUT);
+  for (int i = 0; i < 3; i++) pinMode(YELLOW_PINS[i], OUTPUT);
   for (int i = 0; i < 2; i++) pinMode(RED_PINS[i], OUTPUT);
   pinMode(CRITICAL_PIN, OUTPUT);
 }
@@ -310,6 +320,18 @@ void updateCriticalBlink() {
   }
 }
 
+void updateLedFailsafe() {
+  if (ledFailsafeActive || millis() - lastLedCommandAt < LED_FAILSAFE_MS) return;
+  // Clear stale backend state after 30 seconds without an LED command.
+  setLedRow(GREEN_PINS, 5, 0);
+  setLedRow(YELLOW_PINS, 3, 0);
+  setLedRow(RED_PINS, 2, 0);
+  ledCritical = false;
+  blinkOn = false;
+  digitalWrite(CRITICAL_PIN, LOW);
+  ledFailsafeActive = true;
+}
+
 // ---------------------------------------------------------------------
 // Phase 7: audio capture for server-side YAMNet classification.
 // Records exactly AUDIO_NUM_SAMPLES (1s @ 16kHz) into a heap buffer,
@@ -319,55 +341,72 @@ void updateCriticalBlink() {
 // storage" note at the top of this file).
 // ---------------------------------------------------------------------
 void captureAndPublishAudio() {
-  if (!mqtt.connected()) return;
+  logAudioHeap("before capture");
+  if (!mqtt.connected()) {
+    Serial.println("[audio] MQTT disconnected; capture skipped.");
+    logAudioHeap("after capture");
+    return;
+  }
 
   int16_t* samples = (int16_t*)malloc(AUDIO_NUM_SAMPLES * sizeof(int16_t));
   if (!samples) {
     Serial.println("[audio] malloc failed — skipping this capture.");
+    logAudioHeap("after capture");
     return;
   }
 
   Serial.println("[audio] Capturing 1s clip...");
   const uint32_t sampleIntervalUs = 1000000UL / AUDIO_SAMPLE_RATE_HZ;
   unsigned long nextSampleAt = micros();
+  const uint32_t captureStartedAt = micros();
 
   for (uint32_t i = 0; i < AUDIO_NUM_SAMPLES; i++) {
-    while (micros() < nextSampleAt) { /* busy-wait for precise sample timing */
+    while ((int32_t)(micros() - nextSampleAt) < 0) { /* wrap-safe sample deadline */
     }
     nextSampleAt += sampleIntervalUs;
 
-    // ESP32 ADC is 12-bit (0-4095), centered around ~2048 for an
-    // AC-coupled mic signal. Shift into a signed 16-bit range for
-    // standard PCM16 WAV — this is the same calibration point used by
-    // sampleDbLevel(), just recorded as a waveform instead of a min/max
-    // envelope.
+    // Scale raw ADC codes into int16 range; the measured clip mean is removed below.
     int raw = analogRead(MIC_PIN);
-    samples[i] = (int16_t)((raw - 2048) * 16);
+    samples[i] = (int16_t)(raw * 8);
+  }
+  const uint32_t captureDurationUs = micros() - captureStartedAt;
+  // Above ~1,050,000 us indicates analogRead is too slow for a 16 kHz capture.
+  Serial.printf("[audio] capture took %lu us (target 1000000)\n", (unsigned long)captureDurationUs);
+
+  // Remove the clip's actual DC bias using a wide accumulator, then saturate PCM16.
+  int32_t sampleSum = 0;
+  for (uint32_t i = 0; i < AUDIO_NUM_SAMPLES; i++) sampleSum += samples[i];
+  const int32_t sampleMean = sampleSum / (int32_t)AUDIO_NUM_SAMPLES;
+  for (uint32_t i = 0; i < AUDIO_NUM_SAMPLES; i++) {
+    int32_t centered = (int32_t)samples[i] - sampleMean;
+    if (centered > INT16_MAX) centered = INT16_MAX;
+    if (centered < INT16_MIN) centered = INT16_MIN;
+    samples[i] = (int16_t)centered;
   }
 
   uint32_t dataBytes = AUDIO_NUM_SAMPLES * sizeof(int16_t);
   uint8_t header[44];
   buildWavHeader(header, dataBytes, AUDIO_SAMPLE_RATE_HZ);
 
-  // PubSubClient has no streaming publish API — build the full frame
-  // (header + samples) into one buffer sized to MQTT_BUFFER_BYTES and
-  // publish it in one call.
-  static uint8_t* frame = nullptr;
-  if (!frame) frame = (uint8_t*)malloc(MQTT_BUFFER_BYTES);
-  if (!frame) {
-    Serial.println("[audio] frame malloc failed — skipping this capture.");
-    free(samples);
-    return;
+  // PubSubClient 2.8 streams payloads with beginPublish/write/endPublish, so
+  // the default MQTT packet buffer only needs to hold the short topic/header.
+  bool ok = mqtt.beginPublish(audioTopic.c_str(), 44 + dataBytes, false);
+  if (ok) {
+    bool headerWritten = mqtt.write(header, sizeof(header)) == sizeof(header);
+    bool samplesWritten = headerWritten && mqtt.write((const uint8_t*)samples, dataBytes) == dataBytes;
+    mqtt.endPublish(); // PubSubClient 2.8 returns a constant success here; writes carry the result.
+    ok = headerWritten && samplesWritten;
+    if (!ok) mqtt.disconnect(); // A short write leaves a partial MQTT frame on the stream.
   }
+  if (!ok) Serial.println("[audio] Streaming publish failed; clip skipped.");
+  else Serial.printf("[audio] Published %lu bytes.\n", (unsigned long)(44 + dataBytes));
+  free(samples);
+  logAudioHeap("after capture");
+}
 
-  memcpy(frame, header, 44);
-  memcpy(frame + 44, samples, dataBytes);
-  free(samples); // done with the raw samples the moment they're copied into frame
-
-  bool ok = mqtt.publish(audioTopic.c_str(), frame, 44 + dataBytes, false);
-  Serial.printf("[audio] Published %lu bytes: %s\n", (unsigned long)(44 + dataBytes), ok ? "ok" : "FAILED (check MQTT_BUFFER_BYTES / broker max message size)");
-  // `frame` is reused (not freed) across captures to avoid heap
-  // fragmentation from repeated malloc/free of the same large block.
+void logAudioHeap(const char* label) {
+  Serial.printf("[audio] Heap %s: free=%u max-block=%u bytes\n", label,
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 }
 
 void buildWavHeader(uint8_t* header, uint32_t dataBytes, uint32_t sampleRate) {

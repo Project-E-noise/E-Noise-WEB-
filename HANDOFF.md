@@ -138,6 +138,7 @@ Likely panel questions and honest answers:
 8. `server/db/migrations/008_sensor_status.sql`
 9. `server/db/migrations/009_realtime_state.sql`
 10. `server/db/migrations/010_ml_classification.sql`
+11. `server/db/migrations/011_client_accounts.sql`
 
 ## 12. Likely next steps (priority order)
 

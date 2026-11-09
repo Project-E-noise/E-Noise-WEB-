@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Modal } from "../common/Modal";
 import { Input } from "../common/FormFields";
 
-const EMPTY = { full_name: "" };
+const EMPTY = { full_name: "", email: "", contact: "" };
 
 export function OccupantModal({ open, initial, onClose, onSubmit }) {
   const [form, setForm] = useState(EMPTY);
@@ -10,7 +10,7 @@ export function OccupantModal({ open, initial, onClose, onSubmit }) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (open) setForm(initial ? { full_name: initial.full_name } : EMPTY);
+    if (open) setForm(initial ? { full_name: initial.full_name, email: initial.email || "", contact: initial.contact || "" } : EMPTY);
     setError(null);
   }, [open, initial]);
 
@@ -33,7 +33,9 @@ export function OccupantModal({ open, initial, onClose, onSubmit }) {
   return (
     <Modal open={open} title={initial ? "Edit Occupant" : "New Occupant"} subtitle="Search existing names first to avoid duplicate records" onClose={onClose}>
       <form onSubmit={submit}>
-        <Input label="Full name" value={form.full_name} onChange={v => setForm({ full_name: v })} placeholder="e.g. Juan Dela Cruz" required />
+        <Input label="Full name" value={form.full_name} onChange={v => setForm(prev => ({ ...prev, full_name: v }))} placeholder="e.g. Juan Dela Cruz" required />
+        <Input label="Email (optional, for client login)" type="email" value={form.email} onChange={v => setForm(prev => ({ ...prev, email: v }))} />
+        <Input label="Contact (optional)" value={form.contact} onChange={v => setForm(prev => ({ ...prev, contact: v }))} />
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
           <button type="button" className="btn grow center" onClick={onClose}>

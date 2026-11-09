@@ -53,6 +53,8 @@ export async function serializeTable(table) {
     warning_threshold: Number(table.warning_threshold),
     critical_threshold: Number(table.critical_threshold),
     confirmation_seconds: table.confirmation_seconds,
+    // Keep the persisted configuration status separate from the live SAFE/WARNING/CRITICAL reading status.
+    configured_status: table.status,
     status: computeStatus(dbLevel, table),
     is_online: sensorStatus?.is_online ?? false,
     // is_monitoring: an above-critical streak is in progress but hasn't yet

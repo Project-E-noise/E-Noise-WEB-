@@ -7,9 +7,9 @@ import { useToast } from "../context/ToastContext";
 
 const LED_MAPPING = [
   { color: "#63B328", name: "Low / Safe", range: "Below warning threshold", leds: "1-5 green LEDs active" },
-  { color: "#E8A020", name: "Warning", range: "At or above warning threshold", leds: "5 green + up to 2 yellow LEDs" },
-  { color: "#E04444", name: "Excessive", range: "At or above critical threshold", leds: "5G + 2Y + up to 2 red LEDs" },
-  { color: "#A32D2D", name: "Critical (confirmed)", range: "Sustained past confirmation duration", leds: "All 9 ON + critical indicator blinks", danger: true }
+  { color: "#E8A020", name: "Warning", range: "At or above warning threshold", leds: "5 green + up to 3 yellow LEDs" },
+  { color: "#E04444", name: "Excessive", range: "At or above critical threshold", leds: "5G + 3Y + up to 2 red LEDs" },
+  { color: "#A32D2D", name: "Critical (confirmed)", range: "Sustained past confirmation duration", leds: "All 10 non-critical LEDs ON + critical indicator blinks", danger: true }
 ];
 
 export default function Thresholds() {

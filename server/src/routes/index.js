@@ -6,10 +6,12 @@ import occupantsRoutes from "./occupantsRoutes.js";
 import thresholdsRoutes from "./thresholdsRoutes.js";
 import analyticsRoutes from "./analyticsRoutes.js";
 import exportRoutes from "./exportRoutes.js";
+import clientRoutes from "./clientRoutes.js";
 
 const router = Router();
 
 router.use("/auth", authRoutes);
+router.use("/client", clientRoutes);
 router.use("/tables", tablesRoutes);
 router.use("/incidents", incidentsRoutes);
 router.use("/occupants", occupantsRoutes);

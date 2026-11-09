@@ -70,7 +70,11 @@ async function request(path, { method = "GET", body, headers = {}, timeout = DEF
   const data = contentType.includes("application/json") ? await res.json().catch(() => null) : null;
 
   if (!res.ok) {
-    if (res.status === 401) setToken(null);
+    if (res.status === 401) {
+      setToken(null);
+      // Let AuthContext leave protected screens when an API response invalidates this browser session.
+      if (typeof window !== "undefined") window.dispatchEvent(new Event("enoise:auth-expired"));
+    }
     throw new ApiError(data?.message || `Request failed (${res.status})`, res.status, data);
   }
   return data;
@@ -80,6 +84,7 @@ export const apiClient = {
   get: (path, opts) => request(path, { ...opts, method: "GET" }),
   post: (path, body, opts) => request(path, { ...opts, method: "POST", body }),
   put: (path, body, opts) => request(path, { ...opts, method: "PUT", body }),
+  patch: (path, body, opts) => request(path, { ...opts, method: "PATCH", body }),
   delete: (path, opts) => request(path, { ...opts, method: "DELETE" })
 };
 

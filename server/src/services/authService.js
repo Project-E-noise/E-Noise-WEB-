@@ -10,8 +10,8 @@ const VERIFICATION_TOKEN_TTL_MS = 1000 * 60 * 60 * 24; // 24 hours
 
 export const publicAdmin = adminsModel.publicAdmin;
 
-function signToken(admin) {
-  return jwt.sign({ sub: admin.id }, env.jwtSecret, { expiresIn: env.jwtExpiresIn });
+function signToken(admin, role = "admin") {
+  return jwt.sign({ sub: admin.id, role }, env.jwtSecret, { expiresIn: env.jwtExpiresIn });
 }
 
 export async function register({ full_name, email, password }) {
@@ -64,4 +64,18 @@ export async function resendVerification(email) {
   await adminsModel.setVerificationToken(admin.id, { verification_token, verification_token_expires_at });
   await sendVerificationEmail({ to: admin.email, verifyUrl: `${env.clientUrl}/verify-email?token=${verification_token}` });
   return { message: "If that account needs verification, a new email has been sent." };
+}
+
+export async function updateAdminProfile(id, { full_name }) {
+  if (!full_name?.trim()) throw badRequest("Name is required.");
+  if (full_name.trim().length > 100) throw badRequest("Name must be 100 characters or fewer.");
+  return publicAdmin(await adminsModel.updateProfile(id, full_name.trim()));
+}
+
+export async function changeAdminPassword(id, { current_password, new_password }) {
+  const admin = await adminsModel.findById(id);
+  if (!admin || !await bcrypt.compare(current_password || "", admin.password_hash)) throw badRequest("Current password is incorrect.");
+  if (String(new_password || "").length < 8) throw badRequest("Password must be at least 8 characters.");
+  await adminsModel.updatePassword(id, await bcrypt.hash(new_password, 10));
+  return { message: "Password updated." };
 }

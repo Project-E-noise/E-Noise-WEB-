@@ -110,9 +110,9 @@ export function parseStatus(raw) {
 
 /**
  * LED command the backend publishes back to the device (retained), so the
- * physical 10-LED array always reflects the same authoritative state the
+ * physical 11-LED array always reflects the same authoritative state the
  * dashboard shows — the device never decides this itself:
- *   { "green": 5, "yellow": 2, "red": 0, "critical": false }
+ *   { "green": 5, "yellow": 3, "red": 0, "critical": false }
  */
 export function buildLedPayload({ green, yellow, red, critical }) {
   return JSON.stringify({ green, yellow, red, critical: Boolean(critical) });

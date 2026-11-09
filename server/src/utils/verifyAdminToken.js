@@ -19,6 +19,7 @@ export async function verifyAdminToken(token) {
   } catch {
     return { ok: false, reason: "invalid" };
   }
+  if (payload.role === "client") return { ok: false, reason: "wrong_role" };
 
   const admin = await adminsModel.findById(payload.sub);
   if (!admin) return { ok: false, reason: "not_found" };

@@ -20,7 +20,8 @@ export default function TableConfiguration() {
   const [formError, setFormError] = useState(null);
 
   const tables = Array.isArray(tablesQuery.data) ? tablesQuery.data : tablesQuery.data?.tables ?? [];
-  const draftFor = t => drafts[t.id] ?? t;
+  // Table summaries expose live SAFE/WARNING/CRITICAL as `status`; this form edits the persisted table status instead.
+  const draftFor = t => drafts[t.id] ?? { ...t, status: t.configured_status ?? "AVAILABLE" };
   const updateDraft = (id, field, value) => setDrafts(prev => ({ ...prev, [id]: { ...draftFor(tables.find(t => t.id === id)), ...prev[id], [field]: value } }));
 
   const create = async () => {

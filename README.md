@@ -105,7 +105,7 @@ updates -> CSV export.
 |---|---|---|
 | `enoise/<node>/telemetry` | device → backend | `{ "db_level": 62.4, "classification"?, "confidence"?, "timestamp"? }` |
 | `enoise/<node>/status` | device → backend (retained + Last Will) | `{ "online": true }` |
-| `enoise/<node>/led` | backend → device (retained) | `{ "green": 5, "yellow": 2, "red": 0, "critical": false }` |
+| `enoise/<node>/led` | backend → device (retained) | `{ "green": 5, "yellow": 3, "red": 0, "critical": false }` |
 
 Only `db_level` is required on telemetry — `classification`/`confidence` are
 optional since this firmware doesn't run on-device ML (YAMNet stays
@@ -130,7 +130,7 @@ shaped exactly like a real node — `npm run simulate -- --node NODE-002
 watch an incident, a violation, and the LED state all get created live.
 
 **ESP32 firmware**: `firmware/enoise_node/enoise_node.ino` — publishes
-telemetry, drives the 10-LED array from backend-pushed LED commands, sets
+telemetry, drives the 11-LED array from backend-pushed LED commands, sets
 an MQTT Last Will so the dashboard learns about power/WiFi loss instantly.
 Wiring and pin map are documented at the top of the file. The dB(A)
 conversion is a starting point, not calibrated — check the comments before
@@ -213,3 +213,25 @@ test in `ml-service/` before it ever touched real audio.
   directly — services never write raw SQL.
 - `server/src/services/*.js` — unchanged business rules from Phase 2,
   now reading/writing through the models instead of an in-memory store.
+
+## Client portal
+
+Clients can register at `/client/register` without choosing a password first. Protected pages are `/client/dashboard`, `/client/logs`, `/client/violations`, and `/client/profile`. Client JWTs carry `role: "client"`; admin endpoints reject them and client endpoints derive occupant scope only from that token. The portal exposes occupant activity and violation summaries without raw audio.
+
+API endpoints: `POST /api/client/register` (name, email, optional contact; no password), `POST /api/client/resend-verification`, non-consuming `GET /api/client/verify-email?token=...`, `POST /api/client/set-password`, `POST /api/client/login`, `POST /api/client/logout`, `GET/PATCH /api/client/profile`, `POST /api/client/change-password`, and paginated/date-filterable `GET /api/client/logs` and `/api/client/violations`.
+
+Setup flow:
+
+1. Register with a name, email, and optional contact. No password is stored at this step.
+2. Open the emailed setup link to confirm the email and choose a password.
+3. The single-use link sets the password and verifies the email; the page does not sign the user in.
+4. Sign in at `/client/login`. Old `/client/verify-email` links redirect to the password setup page.
+
+Migration `011_client_accounts.sql` adds credentials, verification, contact, and optional email fields directly to `occupants`, avoiding duplicate occupant records. No `012` migration was needed: `011` already contains the fields and case-insensitive email index required by this change. Existing occupants can be linked by adding their email in **Occupants** before client registration. To test, ensure PostgreSQL is running and `DATABASE_URL` points to it, run `npm run db:migrate` from `server/`, start the API, register at `/client/register`, verify using the emailed or backend console link, log in, and visit each client page. Registering again before verification refreshes the token and resends. Three confirmed incidents create the same one-week ban as before. `POST /api/client/resend-verification` uses a generic response. A client bearer token sent to an admin endpoint should receive HTTP 403.
+
+### Known limitations
+
+- Anyone can trigger a verification email to an address. For an existing unverified occupant email, registration only rotates that record's verification token; it does not change the occupant's name, contact, or password. No account access is granted until the email link is used to set a password.
+- Logout is stateless: it clears the browser token but does not revoke a copied JWT before its expiry.
+- Bans never auto-expire in the database, and strike counts never reset. The client shows “Clear” after `ban_until` passes while the admin occupant status can remain `BANNED`.
+- Client date filters use inclusive UTC calendar-day boundaries.
