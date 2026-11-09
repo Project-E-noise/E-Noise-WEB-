@@ -1,32 +1,38 @@
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 const ToastContext = createContext(null);
+const TOAST_MS = 3000;
 
+// Small pop-up message at the bottom right. showToast("Saved") or
+// showToast("Could not save", "error").
 export function ToastProvider({ children }) {
-  const [toast, setToastState] = useState(null);
+  const [toast, setToast] = useState(null);
 
   const showToast = useCallback((message, tone = "success") => {
-    setToastState({ message, tone, key: Date.now() });
+    setToast({ message, tone, key: Date.now() });
   }, []);
+
+  // One timer per toast; showing a new toast restarts it.
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = setTimeout(() => setToast(null), TOAST_MS);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const value = useMemo(() => ({ showToast }), [showToast]);
 
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <ToastViewport toast={toast} onDone={() => setToastState(null)} />
+      <div aria-live="polite">
+        {toast && (
+          <div className={`toast ${toast.tone === "error" ? "toast-error" : ""}`} key={toast.key} role={toast.tone === "error" ? "alert" : "status"}>
+            <i className={`ti ${toast.tone === "error" ? "ti-alert-circle" : "ti-circle-check"}`} aria-hidden="true" />
+            <span>{toast.message}</span>
+          </div>
+        )}
+      </div>
     </ToastContext.Provider>
-  );
-}
-
-function ToastViewport({ toast, onDone }) {
-  if (!toast) return <div className="toast" aria-hidden="true" />;
-  setTimeout(onDone, 2800);
-  return (
-    <div className={`toast show ${toast.tone === "error" ? "toast-error" : ""}`} key={toast.key}>
-      <i className={`ti ${toast.tone === "error" ? "ti-alert-circle" : "ti-circle-check"}`} />
-      <span>{toast.message}</span>
-    </div>
   );
 }
 

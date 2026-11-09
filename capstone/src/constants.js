@@ -1,5 +1,6 @@
-// Central, single-source constants for Project E-Noise.
-// Keep business rules here instead of duplicating them across components.
+// Shared constants for the dashboard. The category strings must match
+// server/src/data/constants.js, the SQL CHECK constraints, the firmware and
+// ml-service/category_mapping.py exactly.
 
 // Exactly four ML sound categories — do not add or remove.
 export const ML_CATEGORIES = ["Loud Conversation", "Mobile Phone Noise", "Impact Noise", "Ambient Baseline"];
@@ -11,13 +12,8 @@ export const LED_CONFIG = { green: 5, yellow: 3, red: 2, critical: 1 };
 // the frontend only displays the backend-provided ban status).
 export const BAN_VIOLATION_THRESHOLD = 3;
 
-// Minimum sustained duration before a threshold crossing becomes a confirmed
-// incident. This is a backend business rule — the frontend only displays it.
-export const DEFAULT_CONFIRMATION_SECONDS = 10;
 
 export const TABLE_STATUSES = ["AVAILABLE", "OCCUPIED", "OFFLINE", "PAUSED"];
-export const OCCUPANT_STATUSES = ["ACTIVE", "WARNED", "BANNED"];
-export const ACCOUNT_STATES = ["UNVERIFIED", "VERIFIED", "DISABLED"];
 export const INCIDENT_STATUSES = ["MONITORING", "CONFIRMED", "DISMISSED"];
 
 export const NAV_SECTIONS = [

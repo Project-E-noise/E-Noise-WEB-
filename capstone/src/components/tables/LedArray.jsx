@@ -1,19 +1,16 @@
 import { LED_CONFIG } from "../../constants";
 
-// Renders the 5 green / 3 yellow / 2 red / 1 critical LED
-// arrangement. States (inactive/active/blinking) come entirely from the
-// backend-provided led_state — this component never decides them itself.
-// led_state shape: { green: number, yellow: number, red: number, critical: boolean }
+// Shows the 5 green / 3 yellow / 2 red / 1 critical LEDs. Which ones are on
+// comes from the backend (led_state); this component never decides it.
+// led_state: { green: number, yellow: number, red: number, critical: boolean }
 export function LedArray({ ledState, large = false }) {
   const state = ledState || { green: 0, yellow: 0, red: 0, critical: false };
-
-  const row = (count, activeCount, colorClass) =>
-    Array.from({ length: count }).map((_, i) => (
-      <span key={`${colorClass}-${i}`} className={`led-dot led-dot-${colorClass} ${i < activeCount ? "on" : "off"}`} />
-    ));
+  const row = (count, activeCount, color) =>
+    Array.from({ length: count }, (_, i) => <span key={`${color}-${i}`} className={`led-dot led-dot-${color} ${i < activeCount ? "on" : "off"}`} />);
+  const label = `LEDs: ${state.green} green, ${state.yellow} yellow, ${state.red} red${state.critical ? ", critical on" : ""}`;
 
   return (
-    <div className={`led-array2 ${large ? "large" : ""}`} title="LED state reported by backend/device telemetry">
+    <div className={`led-array ${large ? "large" : ""}`} role="img" aria-label={label} title="LED state reported by the backend">
       <div className="led-row">{row(LED_CONFIG.green, state.green, "g")}</div>
       <div className="led-row">{row(LED_CONFIG.yellow, state.yellow, "y")}</div>
       <div className="led-row">{row(LED_CONFIG.red, state.red, "r")}</div>

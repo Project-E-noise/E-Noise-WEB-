@@ -1,21 +1,24 @@
+// Loading, empty and error states used on every data page, so they all
+// look and behave the same.
+
 export function LoadingState({ label = "Loading..." }) {
   return (
-    <div className="empty">
-      <i className="ti ti-loader-2 spin" />
-      <div className="empty-title">{label}</div>
+    <div className="state" role="status">
+      <i className="ti ti-loader-2 spin" aria-hidden="true" />
+      <div className="state-title">{label}</div>
     </div>
   );
 }
 
 export function ErrorState({ message = "Something went wrong.", onRetry }) {
   return (
-    <div className="empty empty-error">
-      <i className="ti ti-alert-triangle" />
-      <div className="empty-title">Couldn't load this data</div>
-      <div className="empty-sub">{message}</div>
+    <div className="state state-error" role="alert">
+      <i className="ti ti-alert-triangle" aria-hidden="true" />
+      <div className="state-title">Couldn't load this data</div>
+      <div className="state-sub">{message}</div>
       {onRetry && (
-        <button className="btn btn-primary retry-btn" onClick={onRetry}>
-          <i className="ti ti-refresh" /> Retry
+        <button type="button" className="btn btn-primary" onClick={onRetry}>
+          <i className="ti ti-refresh" /> Try again
         </button>
       )}
     </div>
@@ -24,19 +27,18 @@ export function ErrorState({ message = "Something went wrong.", onRetry }) {
 
 export function EmptyState({ icon = "ti-inbox", title = "Nothing here yet", subtitle, action }) {
   return (
-    <div className="empty">
-      <i className={`ti ${icon}`} />
-      <div className="empty-title">{title}</div>
-      {subtitle && <div className="empty-sub">{subtitle}</div>}
+    <div className="state">
+      <i className={`ti ${icon}`} aria-hidden="true" />
+      <div className="state-title">{title}</div>
+      {subtitle && <div className="state-sub">{subtitle}</div>}
       {action}
     </div>
   );
 }
 
-// Wraps a useAsync-style {loading, error, data} result and renders the right
-// state automatically, so pages don't repeat this branching everywhere.
+// Shows loading / error / empty / the content, depending on a useAsync result.
 export function AsyncSection({ loading, error, data, isEmpty, onRetry, loadingLabel, emptyProps, children }) {
-  if (loading) return <LoadingState label={loadingLabel} />;
+  if (loading && !data) return <LoadingState label={loadingLabel} />;
   if (error) return <ErrorState message={error.message} onRetry={onRetry} />;
   if (isEmpty ? isEmpty(data) : !data) return <EmptyState {...emptyProps} />;
   return children(data);

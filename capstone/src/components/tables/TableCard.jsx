@@ -1,61 +1,50 @@
 import { Link } from "react-router-dom";
 import { LedArray } from "./LedArray";
-import { formatDb, tableLabel } from "../../utils/formatting";
+import { ClassificationChip } from "./ClassificationChip";
+import { formatDateTime, formatDb, tableLabel } from "../../utils/formatting";
 
-const STATUS_BADGE = { SAFE: "badge-safe", WARNING: "badge-warn", CRITICAL: "badge-crit", OFFLINE: "badge-neu" };
+export const STATUS_BADGE = { SAFE: "badge-safe", WARNING: "badge-warn", CRITICAL: "badge-crit" };
 
+// One table on the Live Overview page.
 export function TableCard({ table }) {
-  const status = (table.status || (table.is_online === false ? "OFFLINE" : "SAFE")).toUpperCase();
-  const online = table.sensor_status?.is_online ?? table.is_online ?? false;
+  const status = table.status || "SAFE";
+  const critical = status === "CRITICAL";
 
   return (
-    <Link to={`/tables/${table.id}`} className="table-card">
+    <Link to={`/tables/${table.id}`} className={`table-card ${critical ? "is-critical" : ""}`}>
       <div className="zone-hdr">
         <div>
           <div className="zone-name">{tableLabel(table)}</div>
-          <div className="zone-node">{table.sensor_node_id || "No sensor node assigned"}</div>
+          <div className="zone-node">{table.sensor_node_id}</div>
         </div>
-        <span className={`badge ${STATUS_BADGE[status] || "badge-neu"}`}>{online ? status : "OFFLINE"}</span>
+        <span className={`badge ${table.is_online ? STATUS_BADGE[status] : "badge-neu"}`}>{table.is_online ? status : "OFFLINE"}</span>
       </div>
 
       {table.is_monitoring && (
         <div className="badge badge-warn table-card-monitoring">
-          <i className="ti ti-clock-hour-3" /> Confirming critical ({table.confirmation_seconds}s window)
+          <i className="ti ti-clock-hour-3" /> Confirming critical ({table.confirmation_seconds}s)
         </div>
       )}
 
       <div className="db-readout">
-        <div className={`db-val ${status === "CRITICAL" ? "crit-col" : ""}`}>{formatDb(table.current_db ?? table.db_level)}</div>
-        <div className="db-lbl">dB(A) - live</div>
+        <div className={`db-val ${critical ? "crit-col" : ""}`}>{formatDb(table.current_db)}</div>
+        <div className="db-lbl">dB(A) {table.is_online ? "live" : "last reading"}</div>
       </div>
 
       <LedArray ledState={table.led_state} />
 
       <div className="table-card-stats">
-        <div>
-          <span className="mini-label">Avg</span> {formatDb(table.avg_db)} dB
-        </div>
-        <div>
-          <span className="mini-label">Peak</span> {formatDb(table.peak_db)} dB
-        </div>
+        <span><span className="mini-label">24h avg</span> {formatDb(table.avg_db)}</span>
+        <span><span className="mini-label">24h peak</span> {formatDb(table.peak_db)}</span>
       </div>
 
-      <div className={`classify-chip ${status === "CRITICAL" ? "chip-crit" : ""}`}>
-        <div className="chip-ico ico-g">
-          <i className="ti ti-waveform" />
-        </div>
-        <div className="flex-1">
-          <div className="chip-lbl">ML Classification</div>
-          <div className="chip-val">{table.classification || "No reading yet"}</div>
-          {table.confidence != null && <div className="chip-conf">Confidence: {Math.round(table.confidence <= 1 ? table.confidence * 100 : table.confidence)}%</div>}
-        </div>
-      </div>
+      <ClassificationChip classification={table.classification} confidence={table.confidence} critical={critical} />
 
       <div className="table-card-footer">
-        <span>{table.occupant?.full_name ? `Occupant: ${table.occupant.full_name}` : "No occupant assigned"}</span>
-        <span className={table.violation_count > 0 ? "zone-alert-text" : "muted-small"}>{table.violation_count ?? 0} violation(s)</span>
+        <span>{table.occupant ? `Occupant: ${table.occupant.full_name}` : "No occupant"}</span>
+        <span className={table.violation_count > 0 ? "alert-text" : ""}>{table.violation_count ?? 0} violation(s)</span>
       </div>
-      {table.last_incident_at && <div className="mono-muted">Last incident: {new Date(table.last_incident_at).toLocaleString()}</div>}
+      {table.last_incident_at && <div className="table-card-footer muted">Last incident: {formatDateTime(table.last_incident_at)}</div>}
     </Link>
   );
 }
