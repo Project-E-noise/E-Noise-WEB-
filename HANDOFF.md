@@ -68,7 +68,7 @@ Not done / open:
 - Rate-limit counters are in memory (reset on restart). The login limit is 10 per 15 min per IP across admin and client login, which a long manual test session can hit.
 - PAUSED/OFFLINE table status doesn't stop incidents (left unchanged on purpose; would be a behavior change).
 - Client portal filters use UTC days; admin pages send local-time ISO ranges + `tz`.
-- The simulator and firmware publish a retained `{"online":true}`. After an API restart a node whose last retained status is "online" shows online for up to 60 s, then goes offline.
+- Retained MQTT status messages set is_online but never update last_seen; only fresh status and telemetry count as heartbeats.
 - `npm run simulate` started through `npm` in Git Bash may not get Ctrl+C; use `--seconds N`.
 
 ## 8. Conventions
