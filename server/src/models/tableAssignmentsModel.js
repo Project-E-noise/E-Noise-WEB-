@@ -44,3 +44,13 @@ export async function releaseForOccupant(occupantId, client) {
   );
   return rows[0] || null;
 }
+
+// Privacy retention: forget who sat where once a seat was released more
+// than `days` days ago. Current seats (released_at IS NULL) are never touched.
+export async function deleteReleasedOlderThan(days) {
+  const { rowCount } = await query(
+    "DELETE FROM table_assignments WHERE released_at IS NOT NULL AND released_at < NOW() - make_interval(days => $1)",
+    [days]
+  );
+  return rowCount;
+}

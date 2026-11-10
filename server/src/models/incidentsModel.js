@@ -136,3 +136,13 @@ export async function totalCount({ from, to } = {}) {
   );
   return rows[0].count;
 }
+
+// Privacy retention: incidents older than `days` days stop pointing at an
+// occupant. The incident itself (table, dB, category, time) is kept.
+export async function unlinkOccupantsOlderThan(days) {
+  const { rowCount } = await query(
+    "UPDATE incidents SET occupant_id = NULL WHERE occupant_id IS NOT NULL AND occurred_at < NOW() - make_interval(days => $1)",
+    [days]
+  );
+  return rowCount;
+}

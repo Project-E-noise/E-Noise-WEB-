@@ -10,6 +10,7 @@ import { useTables, useTable, useTableReadings } from "../hooks/useTables";
 import { useRealtime } from "../hooks/useRealtime";
 import { tablesApi } from "../services/tables";
 import { formatDb, formatDateTime, formatTime, tableLabel } from "../utils/formatting";
+import { READINGS_RETENTION_NOTE } from "../constants";
 import { rangeParams } from "../utils/dates";
 
 export default function TableMonitoring() {
@@ -118,7 +119,10 @@ function TableDetail({ id }) {
 
       <section className="card">
         <div className="card-header">
-          <h2 className="card-title">Noise today (1-minute averages)</h2>
+          <div>
+            <h2 className="card-title">Noise today (1-minute averages)</h2>
+            <div className="card-sub">{READINGS_RETENTION_NOTE}</div>
+          </div>
         </div>
         <AsyncSection
           loading={readingsQuery.loading}

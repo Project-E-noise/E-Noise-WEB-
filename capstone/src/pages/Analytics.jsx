@@ -9,7 +9,7 @@ import { useAsync } from "../hooks/useAsync";
 import { analyticsApi } from "../services/analytics";
 import { exportsApi } from "../services/exports";
 import { useToast } from "../context/ToastContext";
-import { ML_CATEGORIES } from "../constants";
+import { ML_CATEGORIES, READINGS_RETENTION_NOTE } from "../constants";
 import { rangeParams, viewerTimezone } from "../utils/dates";
 
 const RANGES = [
@@ -35,7 +35,7 @@ export default function Analytics() {
 
   return (
     <div className="page">
-      <Topbar title="Analytics" subtitle="Noise and incidents over time">
+      <Topbar title="Analytics" subtitle={`Noise and incidents over time. ${READINGS_RETENTION_NOTE}`}>
         <Select label="Period" value={range} onChange={setRange} options={RANGES} />
         <button type="button" className="btn" onClick={exportReadings}><i className="ti ti-download" /> Export readings</button>
       </Topbar>

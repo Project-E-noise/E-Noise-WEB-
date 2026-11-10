@@ -100,6 +100,20 @@ export async function trendAverages({ from, to, tz = "UTC", bucket = "hour" } = 
   return rows;
 }
 
+// Deletes up to `batchSize` readings older than `days` days. Returns how
+// many were deleted; call it again until it returns 0. Small batches keep
+// each DELETE short, so inserts from the sensors are never blocked for long.
+export async function deleteOlderThanBatch(days, batchSize = 50000) {
+  const { rowCount } = await query(
+    `DELETE FROM noise_readings WHERE id IN (
+       SELECT id FROM noise_readings
+       WHERE recorded_at < NOW() - make_interval(days => $1)
+       LIMIT $2)`,
+    [days, batchSize]
+  );
+  return rowCount;
+}
+
 export async function create({ table_id, db_level, classification, confidence, recorded_at }) {
   const { rows } = await query(
     `INSERT INTO noise_readings (table_id, db_level, classification, confidence, recorded_at)

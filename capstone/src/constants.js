@@ -12,6 +12,10 @@ export const LED_CONFIG = { green: 5, yellow: 3, red: 2, critical: 1 };
 // the frontend only displays the backend-provided ban status).
 export const BAN_VIOLATION_THRESHOLD = 3;
 
+// Shown next to readings. Keep in sync with NOISE_READINGS_RETENTION_DAYS
+// on the server (default 7), which deletes older raw readings every hour.
+export const READINGS_RETENTION_NOTE = "Raw noise readings are kept for 7 days.";
+
 
 export const TABLE_STATUSES = ["AVAILABLE", "OCCUPIED", "OFFLINE", "PAUSED"];
 export const INCIDENT_STATUSES = ["MONITORING", "CONFIRMED", "DISMISSED"];

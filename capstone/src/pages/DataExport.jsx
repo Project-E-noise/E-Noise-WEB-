@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { READINGS_RETENTION_NOTE } from "../constants";
 import { Topbar } from "../components/layout/Topbar";
 import { Select, Input } from "../components/common/FormFields";
 import { useTables } from "../hooks/useTables";
@@ -7,7 +8,7 @@ import { rangeParams } from "../utils/dates";
 import { useToast } from "../context/ToastContext";
 
 const EXPORT_TYPES = [
-  { key: "readings", icon: "ti-file-spreadsheet", iconClass: "ico-g", title: "Noise readings", desc: "Every dB reading from every table" },
+  { key: "readings", icon: "ti-file-spreadsheet", iconClass: "ico-g", title: "Noise readings", desc: `Every dB reading from every table. ${READINGS_RETENTION_NOTE}` },
   { key: "incidents", icon: "ti-file-alert", iconClass: "ico-r", title: "Incident logs", desc: "Incidents with categories, status and notes" },
   { key: "violations", icon: "ti-file-certificate", iconClass: "ico-b", title: "Occupant violations", desc: "Violation records tied to occupants" },
   { key: "tables", icon: "ti-file-settings", iconClass: "ico-pu", title: "Table configuration", desc: "Table numbers, node IDs and thresholds" }

@@ -51,6 +51,15 @@ if (!Number.isInteger(violationRetentionDays) || violationRetentionDays <= 0) {
   process.exit(1);
 }
 
+// Raw noise readings older than this many days are deleted every hour, to
+// keep the database small (Neon free plan: 1 GB).
+const noiseReadingsRetentionDays = process.env.NOISE_READINGS_RETENTION_DAYS ? Number(process.env.NOISE_READINGS_RETENTION_DAYS) : 7;
+if (!Number.isInteger(noiseReadingsRetentionDays) || noiseReadingsRetentionDays <= 0) {
+  // eslint-disable-next-line no-console
+  console.error("[config] NOISE_READINGS_RETENTION_DAYS must be a positive whole number of days.");
+  process.exit(1);
+}
+
 const corsOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
   .split(",")
   .map(origin => origin.trim())
@@ -91,6 +100,7 @@ export const env = {
   },
   sensorStaleSeconds,
   violationRetentionDays,
+  noiseReadingsRetentionDays,
   mlServiceUrl: (process.env.ML_SERVICE_URL || "http://localhost:8001").replace(/\/+$/, ""),
   mlApiKey: process.env.ML_API_KEY || ""
 };
