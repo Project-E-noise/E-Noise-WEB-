@@ -1,6 +1,7 @@
 import * as violationsModel from "../models/violationsModel.js";
 import * as occupantsModel from "../models/occupantsModel.js";
 import * as tableAssignmentsModel from "../models/tableAssignmentsModel.js";
+import { env } from "../config/env.js";
 import { BAN_VIOLATION_THRESHOLD } from "../data/constants.js";
 
 const BAN_DURATION_DAYS = 7; // one week
@@ -44,6 +45,15 @@ export async function recordViolationIfApplicable(incident, client) {
     await tableAssignmentsModel.releaseForOccupant(occupant.id, client);
   }
   return violation;
+}
+
+/**
+ * Retention: deletes violations older than VIOLATION_RETENTION_DAYS (run
+ * daily from server.js), so strikes only cover that period. Bans are stored
+ * on the occupant (ban_until), so a running ban is not affected.
+ */
+export async function cleanupOldViolations(days = env.violationRetentionDays) {
+  return violationsModel.deleteOlderThan(days);
 }
 
 /** Called when an admin changes an incident away from CONFIRMED. */

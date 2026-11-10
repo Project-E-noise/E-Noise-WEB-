@@ -32,6 +32,15 @@ export async function countStrikes(occupantId, client) {
   return rows[0].count;
 }
 
+/** Deletes violations older than `days` days. Returns how many were deleted. */
+export async function deleteOlderThan(days) {
+  const { rowCount } = await query(
+    "DELETE FROM violations WHERE created_at < NOW() - make_interval(days => $1)",
+    [days]
+  );
+  return rowCount;
+}
+
 /** Next lifetime violation number for an occupant (1, 2, 3, ...). */
 export async function nextNumber(occupantId, client) {
   const { rows } = await runnerFor(client).query(

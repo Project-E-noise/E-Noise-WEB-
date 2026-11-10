@@ -5,6 +5,7 @@ import { pool } from "./config/db.js";
 import { createWsServer } from "./realtime/wsServer.js";
 import { connectMqtt, disconnectMqtt } from "./mqtt/mqttClient.js";
 import { sweepStaleSensors } from "./services/telemetryService.js";
+import { cleanupOldViolations } from "./services/violationsService.js";
 
 // The WebSocket server shares the same HTTP server and port as the REST
 // API (at /ws), so only one port needs to be open.
@@ -33,6 +34,20 @@ async function runSensorSweep() {
 runSensorSweep();
 const sensorSweepTimer = setInterval(runSensorSweep, SENSOR_SWEEP_MS);
 
+// Once at startup, then every 24 h, delete violations older than
+// VIOLATION_RETENTION_DAYS. A database error only logs a warning.
+const VIOLATION_CLEANUP_MS = 24 * 60 * 60 * 1000;
+async function runViolationCleanup() {
+  try {
+    const deleted = await cleanupOldViolations();
+    console.log(`[violations] Retention cleanup deleted ${deleted} violation(s) older than ${env.violationRetentionDays} days.`);
+  } catch (err) {
+    console.warn(`[violations] Retention cleanup failed: ${err.message || err.code || "database unreachable"}`);
+  }
+}
+runViolationCleanup();
+const violationCleanupTimer = setInterval(runViolationCleanup, VIOLATION_CLEANUP_MS);
+
 // Render sends SIGTERM before stopping or redeploying the service. Close
 // connections cleanly so MQTT and Postgres don't keep half-open sessions.
 let shuttingDown = false;
@@ -42,6 +57,7 @@ async function shutdown(signal) {
   console.log(`[server] ${signal} received, shutting down...`);
   setTimeout(() => process.exit(0), 5000).unref();
   clearInterval(sensorSweepTimer);
+  clearInterval(violationCleanupTimer);
   wss.clients.forEach(socket => socket.close(1001, "server restarting"));
   server.close();
   await disconnectMqtt();

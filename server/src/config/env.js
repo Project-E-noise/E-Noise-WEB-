@@ -42,6 +42,15 @@ if (!Number.isInteger(sensorStaleSeconds) || sensorStaleSeconds <= 0) {
   process.exit(1);
 }
 
+// Violations older than this many days are deleted by a daily cleanup, so
+// strikes only count the recent past.
+const violationRetentionDays = process.env.VIOLATION_RETENTION_DAYS ? Number(process.env.VIOLATION_RETENTION_DAYS) : 30;
+if (!Number.isInteger(violationRetentionDays) || violationRetentionDays <= 0) {
+  // eslint-disable-next-line no-console
+  console.error("[config] VIOLATION_RETENTION_DAYS must be a positive whole number of days.");
+  process.exit(1);
+}
+
 const corsOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
   .split(",")
   .map(origin => origin.trim())
@@ -81,6 +90,7 @@ export const env = {
     protocol: process.env.MQTT_PROTOCOL || "mqtts"
   },
   sensorStaleSeconds,
+  violationRetentionDays,
   mlServiceUrl: (process.env.ML_SERVICE_URL || "http://localhost:8001").replace(/\/+$/, ""),
   mlApiKey: process.env.ML_API_KEY || ""
 };

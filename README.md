@@ -54,11 +54,15 @@ Table Configuration is all it takes to register a node.
   the level stays at or above the critical threshold for `confirmation_seconds`
   (default 10) without a gap in readings. State is kept in the database, so a
   restart doesn't lose it.
+- **Occupants:** occupants create their own accounts on the client portal; admins
+  can't create them or change their email. Only an occupant who verified their email
+  and set a password can be assigned to a table (others show as "Unverified").
 - **Violations and bans:** every CONFIRMED incident linked to an occupant is a violation.
   The 3rd strike bans the occupant for one week and releases them from their table.
-  The ban ends by itself at `ban_until`, and strikes start again from 0 (the history
-  is kept). An admin can lift a ban early. Incident + violation + ban are saved in
-  one transaction.
+  The ban ends by itself at `ban_until`, and strikes start again from 0. Violations
+  are kept for `VIOLATION_RETENTION_DAYS` (default 30) and then deleted by a daily
+  cleanup, so strikes only count that period; a running ban is not affected. An admin
+  can lift a ban early. Incident + violation + ban are saved in one transaction.
 - **Categories:** exactly four, spelled identically in JS, SQL, firmware and Python:
   `Loud Conversation`, `Mobile Phone Noise`, `Impact Noise`, `Ambient Baseline`.
 
@@ -165,6 +169,7 @@ Running it again adds nothing new.
 | `MQTT_PROTOCOL` | | `mqtts` (TLS, default) or `mqtt` (local test broker) |
 | `ML_SERVICE_URL` | | ML service address, default `http://localhost:8001` |
 | `ML_API_KEY` | | Shared secret sent as `X-API-Key` to the ML service |
+| `VIOLATION_RETENTION_DAYS` | | Days a violation is kept before the daily cleanup deletes it (default 30, positive whole number) |
 | `TEST_DATABASE_URL` | for tests | Separate database whose name contains `test` (it is wiped) |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_CLIENT_EMAIL`, `SEED_CLIENT_PASSWORD` | | Accounts created by the seed |
 
