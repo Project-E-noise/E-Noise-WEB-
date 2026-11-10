@@ -71,7 +71,7 @@ export function connectMqtt() {
   client.on("error", err => console.error("[mqtt] Connection error:", err.message));
   client.on("offline", () => console.warn("[mqtt] Broker connection offline."));
 
-  client.on("message", (topic, payload) => {
+  client.on("message", (topic, payload, packet) => {
     const nodeId = nodeIdFromTopic(topic);
     if (!nodeId) return;
 
@@ -82,7 +82,9 @@ export function connectMqtt() {
     } else if (topic.endsWith("/status")) {
       const parsed = parseStatus(payload);
       if (parsed.error) return console.warn(`[mqtt] Bad status from ${nodeId}: ${parsed.error}`);
-      runInOrder(nodeId, () => ingestStatus(nodeId, parsed));
+      // A retained status is the broker replaying an old message (e.g. right
+      // after the API restarts), not proof that the node is alive now.
+      runInOrder(nodeId, () => ingestStatus(nodeId, parsed, { retained: Boolean(packet?.retain) }));
     } else if (topic.endsWith("/audio")) {
       // Binary WAV clip. Classification can take seconds (or the ML
       // service may be asleep), so it does not hold up the telemetry queue.

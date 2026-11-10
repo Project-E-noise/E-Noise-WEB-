@@ -142,12 +142,16 @@ export async function ingestAudioClip(nodeId, wavBuffer) {
   broadcastTableUpdate(await serializeTable(table));
 }
 
-/** Online/offline status message (also sent by the broker as the device's Last Will). */
-export async function ingestStatus(nodeId, { online }) {
+/**
+ * Online/offline status message (also sent by the broker as the device's
+ * Last Will). A retained "online" sets the flag but not last_seen: it may be
+ * an old message, so the node only counts as online once it really reports.
+ */
+export async function ingestStatus(nodeId, { online }, { retained = false } = {}) {
   const table = await tablesModel.findBySensorNodeId(nodeId);
   if (!table) return;
 
-  if (online) await sensorStatusModel.setOnline(table.id, true);
+  if (online) await sensorStatusModel.setOnline(table.id, true, { touchLastSeen: !retained });
   else await sensorStatusModel.setOffline(table.id);
 
   broadcastTableUpdate(await serializeTable(table));

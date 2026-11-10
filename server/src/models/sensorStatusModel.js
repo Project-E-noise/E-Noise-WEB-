@@ -43,10 +43,14 @@ export async function createForTable(tableId) {
   return rows[0];
 }
 
-export async function setOnline(tableId, isOnline) {
+// touchLastSeen = false keeps the old last_seen (used for retained status
+// messages, which don't prove the node is alive right now).
+export async function setOnline(tableId, isOnline, { touchLastSeen = true } = {}) {
   const { rows } = await query(
-    `UPDATE sensor_status SET is_online = $2, last_seen = NOW(), updated_at = NOW() WHERE table_id = $1 RETURNING *`,
-    [tableId, isOnline]
+    `UPDATE sensor_status
+     SET is_online = $2, last_seen = CASE WHEN $3 THEN NOW() ELSE last_seen END, updated_at = NOW()
+     WHERE table_id = $1 RETURNING *`,
+    [tableId, isOnline, touchLastSeen]
   );
   return rows[0] || null;
 }

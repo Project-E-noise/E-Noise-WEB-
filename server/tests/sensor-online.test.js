@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { api, resetDatabase, closeDatabase, createAdmin, createTable, bearer, query } from "./helpers.js";
 import * as sensorStatusModel from "../src/models/sensorStatusModel.js";
-import { sweepStaleSensors } from "../src/services/telemetryService.js";
+import { sweepStaleSensors, ingestStatus } from "../src/services/telemetryService.js";
 
 let auth;
 before(async () => {
@@ -99,4 +99,20 @@ test("SENSOR_STALE_SECONDS: default 60, custom value, bad values rejected", () =
   assert.equal(read(undefined), "60");
   assert.equal(read("90"), "90");
   for (const bad of ["0", "-5", "1.5", "abc"]) assert.throws(() => read(bad), undefined, `${bad} must be rejected`);
+});
+
+test("a retained online status is not a heartbeat; a fresh one is", async () => {
+  const table = await createTable({ sensor_node_id: "NODE-RETAIN" });
+  await setSensor(table.id, false, 3 * 86400);
+
+  await ingestStatus("NODE-RETAIN", { online: true }, { retained: true });
+  assert.equal(await onlineFromApi(table.id), false, "retained online with last_seen 3 days ago stays offline");
+  const stillOld = (await query("SELECT last_seen < NOW() - INTERVAL '1 day' AS old FROM sensor_status WHERE table_id = $1", [table.id])).rows[0].old;
+  assert.equal(stillOld, true, "last_seen was not touched");
+
+  await ingestStatus("NODE-RETAIN", { online: true }, { retained: false });
+  assert.equal(await onlineFromApi(table.id), true, "a fresh online status counts");
+
+  await ingestStatus("NODE-RETAIN", { online: false }, { retained: true });
+  assert.equal(await onlineFromApi(table.id), false, "offline always counts, retained or not");
 });
