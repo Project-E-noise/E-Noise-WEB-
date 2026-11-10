@@ -13,8 +13,8 @@ test("register validates input but never reveals whether an email exists", async
   assert.equal((await api().post("/api/client/register").send({ full_name: "", email: "x@y.com" })).status, 400);
   assert.equal((await api().post("/api/client/register").send({ full_name: "X", email: "x@y.com", contact: "1".repeat(101) })).status, 400);
 
-  const first = await api().post("/api/client/register").send({ full_name: "Maria", email: "maria@example.com" });
-  const second = await api().post("/api/client/register").send({ full_name: "Someone Else", email: "MARIA@example.com" });
+  const first = await api().post("/api/client/register").send({ full_name: "Maria", email: "maria@example.com", consent: true });
+  const second = await api().post("/api/client/register").send({ full_name: "Someone Else", email: "MARIA@example.com", consent: true });
   assert.equal(first.status, 201);
   assert.equal(second.status, 201);
   assert.equal(first.body.message, second.body.message);
@@ -51,7 +51,7 @@ test("setup link: check, set password (once), then login", async () => {
 });
 
 test("expired setup links return 410", async () => {
-  await api().post("/api/client/register").send({ full_name: "Late", email: "late@example.com" });
+  await api().post("/api/client/register").send({ full_name: "Late", email: "late@example.com", consent: true });
   const token = setupToken();
   await query("UPDATE occupants SET verification_token_expires_at = NOW() - INTERVAL '1 minute' WHERE email = 'late@example.com'");
   assert.equal((await api().get(`/api/client/verify-email?token=${token}`)).status, 410);
@@ -92,4 +92,33 @@ test("log and violation filters are validated", async () => {
   assert.equal(ok.status, 200);
   assert.equal(ok.body.page_limit, 5);
   assert.equal(ok.body.is_banned, false);
+});
+
+test("registration needs consent, and records when it was given", async () => {
+  for (const consent of [undefined, false, "true", 1]) {
+    const res = await api().post("/api/client/register").send({ full_name: "No Consent", email: "noconsent@example.com", consent });
+    assert.equal(res.status, 400, `consent = ${JSON.stringify(consent)}`);
+    assert.match(res.body.error, /agree/);
+  }
+  assert.equal((await query("SELECT COUNT(*)::int AS n FROM occupants WHERE email = 'noconsent@example.com'")).rows[0].n, 0);
+
+  const ok = await api().post("/api/client/register").send({ full_name: "Consent Given", email: "consent@example.com", consent: true });
+  assert.equal(ok.status, 201);
+  const row = (await query("SELECT consented_at, NOW() - consented_at < INTERVAL '1 minute' AS recent FROM occupants WHERE email = 'consent@example.com'")).rows[0];
+  assert.ok(row.consented_at, "consented_at is set");
+  assert.equal(row.recent, true);
+
+  // A plain "resend email" is not a new consent.
+  await query("UPDATE occupants SET consented_at = NOW() - INTERVAL '2 days' WHERE email = 'consent@example.com'");
+  await api().post("/api/client/resend-verification").send({ email: "consent@example.com" });
+  const after = (await query("SELECT NOW() - consented_at > INTERVAL '1 day' AS old FROM occupants WHERE email = 'consent@example.com'")).rows[0];
+  assert.equal(after.old, true, "resend leaves consented_at alone");
+
+  // Older accounts have no record; the admin API shows null for them.
+  const { createAdmin } = await import("./helpers.js");
+  const admin = bearer((await createAdmin()).token);
+  const legacy = await createOccupant({ email: "legacy@example.com", password: "Password123" });
+  assert.equal((await api().get(`/api/occupants/${legacy.id}`).set(admin)).body.occupant.consented_at, null);
+  const id = (await query("SELECT id FROM occupants WHERE email = 'consent@example.com'")).rows[0].id;
+  assert.ok((await api().get(`/api/occupants/${id}`).set(admin)).body.occupant.consented_at);
 });

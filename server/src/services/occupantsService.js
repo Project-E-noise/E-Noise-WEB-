@@ -17,6 +17,8 @@ async function serializeOccupant(occupant) {
     contact: occupant.contact,
     // False until the occupant verified their email and set a password.
     account_ready: Boolean(occupant.account_ready),
+    // When they agreed to the privacy notice at registration (null = not recorded).
+    consented_at: occupant.consented_at,
     status: occupant.status,
     ban_started_at: occupant.ban_started_at,
     // Only show the ban end date while the ban is active.

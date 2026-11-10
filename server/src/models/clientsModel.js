@@ -30,18 +30,21 @@ export async function findById(id) {
 
 export async function createPending({ full_name, email, contact, verification_token, verification_token_expires_at }) {
   const { rows } = await query(
-    `INSERT INTO occupants(full_name,email,contact,password_hash,email_verified,is_active,verification_token,verification_token_expires_at)
-     VALUES($1,$2,$3,NULL,FALSE,TRUE,$4,$5) RETURNING ${CREDENTIAL_COLUMNS}`,
+    `INSERT INTO occupants(full_name,email,contact,password_hash,email_verified,is_active,verification_token,verification_token_expires_at,consented_at)
+     VALUES($1,$2,$3,NULL,FALSE,TRUE,$4,$5,NOW()) RETURNING ${CREDENTIAL_COLUMNS}`,
     [full_name, email, contact, verification_token, verification_token_expires_at]
   );
   return rows[0] || null;
 }
 
-export async function updateVerification(id, { verification_token, verification_token_expires_at }) {
+// `consented` = true when this comes from the registration form (the person
+// just agreed to the notice); a plain "resend email" leaves consented_at alone.
+export async function updateVerification(id, { verification_token, verification_token_expires_at, consented = false }) {
   const { rows } = await query(
-    `UPDATE occupants SET verification_token=$2, verification_token_expires_at=$3, updated_at=NOW()
+    `UPDATE occupants SET verification_token=$2, verification_token_expires_at=$3,
+       consented_at = CASE WHEN $4 THEN NOW() ELSE consented_at END, updated_at=NOW()
      WHERE id=$1 RETURNING ${CREDENTIAL_COLUMNS}`,
-    [id, verification_token, verification_token_expires_at]
+    [id, verification_token, verification_token_expires_at, consented]
   );
   return rows[0] || null;
 }

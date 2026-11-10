@@ -7,7 +7,7 @@ export const EFFECTIVE_STATUS = "CASE WHEN status = 'BANNED' AND ban_until <= NO
 // account_ready: the occupant verified their email and set a password, so
 // they finished signing up themselves (required before being seated).
 const COLUMNS = `id, full_name, email, contact, ${EFFECTIVE_STATUS} AS status, ban_started_at, ban_until,
-  strikes_since, (email_verified AND password_hash IS NOT NULL) AS account_ready, created_at, updated_at`;
+  strikes_since, (email_verified AND password_hash IS NOT NULL) AS account_ready, consented_at, created_at, updated_at`;
 
 function runnerFor(client) {
   return client || { query };

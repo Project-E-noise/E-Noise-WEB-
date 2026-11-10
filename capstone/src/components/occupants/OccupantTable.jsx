@@ -4,7 +4,17 @@ import { BAN_VIOLATION_THRESHOLD } from "../../constants";
 
 export function OccupantTable({ occupants, onAssign, onRelease, onEdit, onDelete, onViewViolations, onLiftBan }) {
   const columns = [
-    { key: "full_name", label: "Name", render: o => <div><div>{o.full_name}</div>{o.email && <div className="muted mono">{o.email}</div>}</div> },
+    {
+      key: "full_name",
+      label: "Name",
+      render: o => (
+        <div>
+          <div>{o.full_name}</div>
+          {o.email && <div className="muted mono">{o.email}</div>}
+          <div className="muted-small">Consent: {o.consented_at ? formatDate(o.consented_at) : "Not recorded"}</div>
+        </div>
+      )
+    },
     {
       key: "status",
       label: "Status",

@@ -37,6 +37,7 @@ export async function register(body = {}) {
   const email = check.email(body.email);
   const full_name = check.text(body.full_name, "Full name", { max: 100 });
   const contact = check.optionalText(body.contact, "Contact", { max: 100 });
+  if (body.consent !== true) throw badRequest("Please read the notice and tick the box to agree before creating an account.");
   const generic = { message: "If this address can receive a setup email, instructions have been sent." };
 
   const existing = await clientsModel.findByEmail(email);
@@ -46,7 +47,7 @@ export async function register(body = {}) {
   // their name and contact are not changed by a stranger registering.
   const verification = verificationData();
   const client = existing
-    ? await clientsModel.updateVerification(existing.id, verification)
+    ? await clientsModel.updateVerification(existing.id, { ...verification, consented: true })
     : await clientsModel.createPending({ full_name, email, contact, ...verification });
   await deliverVerification(email, client.verification_token);
   return generic;
