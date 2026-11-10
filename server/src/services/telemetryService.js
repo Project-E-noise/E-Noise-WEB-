@@ -152,3 +152,19 @@ export async function ingestStatus(nodeId, { online }) {
 
   broadcastTableUpdate(await serializeTable(table));
 }
+
+/**
+ * Heartbeat sweep (run every 15 s from server.js). A node that loses power
+ * may never send "offline" (e.g. the API was down when its Last Will fired),
+ * so any sensor silent for longer than SENSOR_STALE_SECONDS is marked
+ * offline here, and open dashboards get a table:update right away.
+ * Returns the table ids that changed.
+ */
+export async function sweepStaleSensors(staleSeconds) {
+  const tableIds = await sensorStatusModel.markStaleOffline(staleSeconds);
+  for (const tableId of tableIds) {
+    const table = await tablesModel.findById(tableId);
+    if (table) broadcastTableUpdate(await serializeTable(table));
+  }
+  return tableIds;
+}

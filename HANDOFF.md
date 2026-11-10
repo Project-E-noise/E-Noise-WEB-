@@ -14,7 +14,7 @@
 Noise monitoring for study-hub tables: ESP32 + MAX9814 nodes publish dB levels over MQTT; an Express/PostgreSQL API stores readings, drives the LEDs, confirms incidents after a sustained critical level, applies the 3-strike / one-week ban rule, and pushes live updates to a React dashboard over WebSocket. Clients (occupants) have their own portal. An optional YAMNet service labels loud moments.
 
 State (2026-11-10): **working end to end locally.**
-- `npm test` in `server/`: 56/56 pass against a real Postgres test DB.
+- `npm test` in `server/`: 61/61 pass against a real Postgres test DB.
 - Frontend `npm run build`: no warnings (lazy routes; main chunk ~269 kB).
 - Playwright click-through (Chrome, scratch script, not committed): 57/57 checks passed for every admin and client page and flow at 375 / 768 / 1280 px, with no console errors other than intentional 4xx from negative tests.
 - `npm run simulate -- --node NODE-002 --spike` through the real HiveMQ broker: 126 readings stored, CONFIRMED incident after 10 s, 3rd strike banned the occupant and released their seat, critical LED cleared afterwards.
@@ -47,11 +47,12 @@ Note for this machine: the developer's `server/.env` points at a local cluster i
 - Client setup: `/client/register` (no password) -> email link `/client/set-password?token=` (single use, 24 h) -> `/client/login`.
 - Live data: `hooks/useRealtime.js` opens `/ws?token=` and refetches on `table:update` / `incident:created`, falling back to polling. Used by Live Overview, Table Monitoring and Real-Time Feed.
 - Sensor -> incident: `mqtt/mqttClient.js` (processes each node's messages in order) -> `services/telemetryService.js` (`ingestTelemetry`, confirmation engine, gap restart) -> `services/incidentsService.createIncident` (transaction: lock occupant, insert incident, `violationsService.recordViolationIfApplicable`, ban + release seat).
+- Sensor online: `sensorStatusModel.EFFECTIVE_ONLINE` (is_online AND last_seen within `SENSOR_STALE_SECONDS`, default 60) is what the API returns as `is_online`. A 15 s sweep in `server.js` (`telemetryService.sweepStaleSensors`) marks silent nodes offline and broadcasts `table:update`.
 - Bans: `occupantsModel.EFFECTIVE_STATUS` makes every read treat an ended ban as ACTIVE; strikes = violations after `occupants.strikes_since` (`violationsModel.countStrikes`).
 - Classification: loud table -> `audio-request` -> device WAV -> `mlClient.js` (X-API-Key, 15 s timeout) -> label stored on `sensor_status`; kept until the table is quiet.
 
 ## 6. Done vs. not done
-Done in this revision: input validation everywhere, consistent `{ error }` responses, helmet, rate limits, production env checks, CORS patterns, log redaction, admin invite code, ban expiry + strike reset (migration 012), CHECK constraints and indexes, export filters + JSON + CSV injection guard, SQL-side analytics with viewer timezone, telemetry fixes (gap restart, single clock, label kept, ordered processing, no deadlock), realistic idempotent seed, 56 API tests, unified responsive UI with loading/empty/error states, lazy routes, 404 page, firmware secrets.h + non-blocking reconnect with backoff, ML API key + Dockerfile, deployment docs.
+Done in this revision: input validation everywhere, consistent `{ error }` responses, helmet, rate limits, production env checks, CORS patterns, log redaction, admin invite code, ban expiry + strike reset (migration 012), CHECK constraints and indexes, export filters + JSON + CSV injection guard, SQL-side analytics with viewer timezone, telemetry fixes (gap restart, single clock, label kept, ordered processing, no deadlock), realistic idempotent seed, 61 API tests, unified responsive UI with loading/empty/error states, lazy routes, 404 page, firmware secrets.h + non-blocking reconnect with backoff, ML API key + Dockerfile, deployment docs.
 
 Not done / open:
 - Real hardware test of the new firmware (Wi-Fi/MQTT reconnect, audio timing, LEDs) - **unverified**.
@@ -67,6 +68,7 @@ Not done / open:
 - Rate-limit counters are in memory (reset on restart). The login limit is 10 per 15 min per IP across admin and client login, which a long manual test session can hit.
 - PAUSED/OFFLINE table status doesn't stop incidents (left unchanged on purpose; would be a behavior change).
 - Client portal filters use UTC days; admin pages send local-time ISO ranges + `tz`.
+- The simulator and firmware publish a retained `{"online":true}`. After an API restart a node whose last retained status is "online" shows online for up to 60 s, then goes offline.
 - `npm run simulate` started through `npm` in Git Bash may not get Ctrl+C; use `--seconds N`.
 
 ## 8. Conventions
@@ -86,7 +88,7 @@ Not done / open:
 ## 10. Demo / defense readiness
 Shortest demo without hardware: run API + web app, log in as admin, open Live Overview, run `npm run simulate -- --node NODE-002 --spike --seconds 40` (needs broker credentials in `server/.env`). Expect the critical bulb, a CONFIRMED incident, and Maria (client account) banned; log in as the client to show the ban. Without a broker, demo everything else with seeded data and manually logged incidents (3 incidents on one occupant's table shows the ban).
 
-Honest answers: dB values are uncalibrated estimates; the classifier is unvalidated; tests cover the API (56) and a browser click-through, not hardware; the WebSocket token is in the URL because browsers can't set headers there, and logs hide it.
+Honest answers: dB values are uncalibrated estimates; the classifier is unvalidated; tests cover the API (61) and a browser click-through, not hardware; the WebSocket token is in the URL because browsers can't set headers there, and logs hide it.
 
 ## 11. Database migrations
 001_admins, 002_tables, 003_occupants, 004_table_assignments, 005_noise_readings, 006_incidents, 007_violations, 008_sensor_status, 009_realtime_state, 010_ml_classification, 011_client_accounts, 012_bans_constraints_indexes (strikes_since, ban/constraint checks, indexes).

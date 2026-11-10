@@ -34,6 +34,14 @@ if (!jwtSecret) {
   }
 }
 
+// How long a sensor may stay silent before it counts as offline.
+const sensorStaleSeconds = process.env.SENSOR_STALE_SECONDS ? Number(process.env.SENSOR_STALE_SECONDS) : 60;
+if (!Number.isInteger(sensorStaleSeconds) || sensorStaleSeconds <= 0) {
+  // eslint-disable-next-line no-console
+  console.error("[config] SENSOR_STALE_SECONDS must be a positive whole number of seconds.");
+  process.exit(1);
+}
+
 const corsOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
   .split(",")
   .map(origin => origin.trim())
@@ -72,6 +80,7 @@ export const env = {
     // "mqtts" (TLS, HiveMQ Cloud) or "mqtt" for a local plain broker.
     protocol: process.env.MQTT_PROTOCOL || "mqtts"
   },
+  sensorStaleSeconds,
   mlServiceUrl: (process.env.ML_SERVICE_URL || "http://localhost:8001").replace(/\/+$/, ""),
   mlApiKey: process.env.ML_API_KEY || ""
 };

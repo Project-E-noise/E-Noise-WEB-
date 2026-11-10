@@ -96,13 +96,13 @@ function TableDetail({ id }) {
           {table.is_monitoring && <div className="alert alert-info">Loud for a moment: confirming whether it lasts {table.confirmation_seconds} seconds...</div>}
           <LedArray ledState={table.led_state} large />
           <div className="stat-grid">
-            <div className="mini-stat"><div className="mini-label">Now</div><div className="mini-value">{formatDb(table.current_db)}</div><div className="mini-unit">dB(A)</div></div>
+            <div className="mini-stat"><div className="mini-label">{table.is_online ? "Now" : "Last reading"}</div><div className="mini-value">{formatDb(table.current_db)}</div><div className="mini-unit">dB(A)</div></div>
             <div className="mini-stat"><div className="mini-label">24h avg</div><div className="mini-value">{formatDb(table.avg_db)}</div><div className="mini-unit">dB(A)</div></div>
             <div className="mini-stat"><div className="mini-label">24h peak</div><div className="mini-value">{formatDb(table.peak_db)}</div><div className="mini-unit">dB(A)</div></div>
           </div>
           <div className="muted-small">
             Thresholds: warning {table.warning_threshold} dB, critical {table.critical_threshold} dB, confirmed after {table.confirmation_seconds}s.
-            Last seen {formatDateTime(table.sensor_status?.last_seen)}.
+            Last seen {table.sensor_status?.last_seen ? formatDateTime(table.sensor_status.last_seen) : "never"}.
           </div>
         </section>
 

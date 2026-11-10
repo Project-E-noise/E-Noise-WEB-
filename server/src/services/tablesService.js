@@ -49,10 +49,11 @@ export async function serializeTable(table) {
     // status is the live noise level (SAFE/WARNING/CRITICAL).
     configured_status: table.status,
     status: computeStatus(dbLevel, table),
-    is_online: sensorStatus?.is_online ?? false,
+    // Online = the node said so AND reported recently (sensorStatusModel).
+    is_online: sensorStatus?.effective_online ?? false,
     // A loud streak is being timed but isn't confirmed yet.
     is_monitoring: Boolean(sensorStatus?.monitoring_since) && !sensorStatus?.led_critical,
-    sensor_status: sensorStatus ? { is_online: sensorStatus.is_online, last_seen: sensorStatus.last_seen } : null,
+    sensor_status: sensorStatus ? { is_online: sensorStatus.effective_online, last_seen: sensorStatus.last_seen } : null,
     current_db: dbLevel,
     avg_db: stats.avg_db,
     peak_db: stats.peak_db,

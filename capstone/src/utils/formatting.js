@@ -20,6 +20,20 @@ export function formatDateTime(value) {
   return date ? date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "--";
 }
 
+// "Never", "just now", "5 minutes ago", "3 days ago"...
+export function formatTimeAgo(value) {
+  const date = toDate(value);
+  if (!date) return "Never";
+  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (seconds < 60) return "just now";
+  const units = [["day", 86400], ["hour", 3600], ["minute", 60]];
+  for (const [name, size] of units) {
+    const count = Math.floor(seconds / size);
+    if (count >= 1) return `${count} ${name}${count === 1 ? "" : "s"} ago`;
+  }
+  return "just now";
+}
+
 export function formatTime(value) {
   const date = toDate(value);
   return date ? date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" }) : "--";

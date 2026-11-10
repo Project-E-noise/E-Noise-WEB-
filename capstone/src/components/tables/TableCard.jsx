@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { LedArray } from "./LedArray";
 import { ClassificationChip } from "./ClassificationChip";
-import { formatDateTime, formatDb, tableLabel } from "../../utils/formatting";
+import { formatDateTime, formatDb, formatTimeAgo, tableLabel } from "../../utils/formatting";
 
 export const STATUS_BADGE = { SAFE: "badge-safe", WARNING: "badge-warn", CRITICAL: "badge-crit" };
 
@@ -28,7 +28,9 @@ export function TableCard({ table }) {
 
       <div className="db-readout">
         <div className={`db-val ${critical ? "crit-col" : ""}`}>{formatDb(table.current_db)}</div>
-        <div className="db-lbl">dB(A) {table.is_online ? "live" : "last reading"}</div>
+        <div className="db-lbl">
+          {table.is_online ? "dB(A) live" : `dB(A) last reading - last seen ${formatTimeAgo(table.sensor_status?.last_seen)}`}
+        </div>
       </div>
 
       <LedArray ledState={table.led_state} />

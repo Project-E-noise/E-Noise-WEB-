@@ -1,8 +1,33 @@
 import { query } from "../config/db.js";
+import { env } from "../config/env.js";
 
-export async function findByTableId(tableId) {
-  const { rows } = await query("SELECT * FROM sensor_status WHERE table_id = $1", [tableId]);
+// The one place that decides whether a sensor is online: the device said so
+// (is_online) AND it reported within the last `staleSeconds`. Without the
+// time check, a node that died while the API was down stayed "online"
+// forever. `param` is the SQL placeholder holding staleSeconds.
+export const EFFECTIVE_ONLINE = param =>
+  `(is_online AND last_seen IS NOT NULL AND last_seen > NOW() - make_interval(secs => ${param}))`;
+
+// Every row comes with `effective_online` (see above). The stored is_online
+// column is kept as-is for the MQTT logic.
+export async function findByTableId(tableId, staleSeconds = env.sensorStaleSeconds) {
+  const { rows } = await query(
+    `SELECT *, ${EFFECTIVE_ONLINE("$2")} AS effective_online FROM sensor_status WHERE table_id = $1`,
+    [tableId, staleSeconds]
+  );
   return rows[0] || null;
+}
+
+// Heartbeat sweep: marks silent sensors offline and returns their table ids
+// so open dashboards can be told. Rows already offline are skipped.
+export async function markStaleOffline(staleSeconds = env.sensorStaleSeconds) {
+  const { rows } = await query(
+    `UPDATE sensor_status SET is_online = FALSE, updated_at = NOW()
+     WHERE is_online AND (last_seen IS NULL OR last_seen < NOW() - make_interval(secs => $1))
+     RETURNING table_id`,
+    [staleSeconds]
+  );
+  return rows.map(row => row.table_id);
 }
 
 export async function findAll() {

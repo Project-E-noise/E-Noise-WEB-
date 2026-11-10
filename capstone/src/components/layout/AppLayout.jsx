@@ -3,11 +3,17 @@ import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { LoadingState } from "../common/UiStates";
 import { useTables } from "../../hooks/useTables";
+import { useRealtime } from "../../hooks/useRealtime";
+import { tablesApi } from "../../services/tables";
 
 // Shell for every admin page: sidebar + page content. On phones and
 // tablets the sidebar is hidden behind a menu button in the top bar.
 export function AppLayout() {
-  const { data } = useTables();
+  const tablesQuery = useTables();
+  const { data } = tablesQuery;
+  // Keep the "X of N online" count fresh: refetch on table:update events,
+  // or every 30 s if the WebSocket is down.
+  useRealtime({ fetcher: tablesApi.list, onData: tablesQuery.setData, interval: 30000 });
   const tables = data?.tables ?? [];
   const online = tables.filter(t => t.is_online).length;
   const [menuOpen, setMenuOpen] = useState(false);
