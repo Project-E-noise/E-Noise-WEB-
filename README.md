@@ -55,14 +55,23 @@ Table Configuration is all it takes to register a node.
   (default 10) without a gap in readings. State is kept in the database, so a
   restart doesn't lose it.
 - **Occupants:** occupants create their own accounts on the client portal; admins
-  can't create them or change their email. Only an occupant who verified their email
-  and set a password can be assigned to a table (others show as "Unverified").
+  can't create them or change their email. Registration requires ticking a privacy
+  notice (Data Privacy Act of 2012); the time is stored in `occupants.consented_at`
+  and shown to admins ("Not recorded" for older accounts). Only an occupant who
+  verified their email and set a password can be assigned to a table (others show
+  as "Unverified").
 - **Violations and bans:** every CONFIRMED incident linked to an occupant is a violation.
   The 3rd strike bans the occupant for one week and releases them from their table.
   The ban ends by itself at `ban_until`, and strikes start again from 0. Violations
   are kept for `VIOLATION_RETENTION_DAYS` (default 30) and then deleted by a daily
-  cleanup, so strikes only count that period; a running ban is not affected. An admin
-  can lift a ban early. Incident + violation + ban are saved in one transaction.
+  cleanup, so strikes only count that period; a running ban is not affected. The same
+  job removes the occupant from incidents older than that and deletes seat history
+  released that long ago (current seats are kept). An admin can lift a ban early.
+  Incident + violation + ban are saved in one transaction.
+- **Raw readings:** `noise_readings` older than `NOISE_READINGS_RETENTION_DAYS`
+  (default 7) are deleted every hour in batches, to stay inside Neon's free 1 GB.
+  Incidents, violations and sensor status are separate and not affected. Analytics
+  and readings exports can therefore only cover the last 7 days.
 - **Categories:** exactly four, spelled identically in JS, SQL, firmware and Python:
   `Loud Conversation`, `Mobile Phone Noise`, `Impact Noise`, `Ambient Baseline`.
 
@@ -169,6 +178,8 @@ Running it again adds nothing new.
 | `MQTT_PROTOCOL` | | `mqtts` (TLS, default) or `mqtt` (local test broker) |
 | `ML_SERVICE_URL` | | ML service address, default `http://localhost:8001` |
 | `ML_API_KEY` | | Shared secret sent as `X-API-Key` to the ML service |
+| `SENSOR_STALE_SECONDS` | | A sensor counts as offline after this many seconds without a reading (default 60) |
+| `NOISE_READINGS_RETENTION_DAYS` | | Days raw noise readings are kept; older ones are deleted every hour (default 7, positive whole number) |
 | `VIOLATION_RETENTION_DAYS` | | Days a violation is kept before the daily cleanup deletes it (default 30, positive whole number) |
 | `TEST_DATABASE_URL` | for tests | Separate database whose name contains `test` (it is wiped) |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_CLIENT_EMAIL`, `SEED_CLIENT_PASSWORD` | | Accounts created by the seed |

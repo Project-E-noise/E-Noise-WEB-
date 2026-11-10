@@ -32,7 +32,7 @@ State (2026-11-10): **working end to end locally.**
 ## 3. Folder map
 - `capstone/src/`: `pages/` (one file per route, lazy-loaded in `App.jsx`), `components/common/` (FormFields, Modal, UiStates, DataTable, DateRangeFilter, Pager, PagedList, AuthLayout, ProfileForms), `components/layout/` (AppLayout with mobile menu, Sidebar, ClientLayout), `hooks/` (useAsync, useRealtime, useTables...), `services/` (apiClient + one file per API area), `utils/` (dates, formatting, validation), `styles.css` (design tokens in `:root`).
 - `server/src/`: `config/` (env, db, dbConfig for SSL), `middleware/` (auth, errorHandler, rateLimits), `routes/`, `controllers/`, `services/`, `models/`, `mqtt/`, `realtime/wsServer.js`, `utils/validate.js` (all input checks).
-- `server/db/`: `migrations/001-012`, `migrate.js` (exports `runMigrations`), `seed.js`. `server/scripts/simulate-device.js`. `server/tests/`.
+- `server/db/`: `migrations/001-013`, `migrate.js` (exports `runMigrations`), `seed.js`. `server/scripts/simulate-device.js`. `server/tests/`.
 - `firmware/enoise_node/`: `enoise_node.ino`, `secrets.example.h` (copy to gitignored `secrets.h`).
 - `ml-service/`: `app.py`, `category_mapping.py`, `finetune_stub.py` (intentionally a stub: no labeled dataset), `Dockerfile`.
 - `docs/HARDWARE_GUIDE.md`: wiring and bench tests.
@@ -49,11 +49,14 @@ Note for this machine: the developer's `server/.env` points at a local cluster i
 - Sensor -> incident: `mqtt/mqttClient.js` (processes each node's messages in order) -> `services/telemetryService.js` (`ingestTelemetry`, confirmation engine, gap restart) -> `services/incidentsService.createIncident` (transaction: lock occupant, insert incident, `violationsService.recordViolationIfApplicable`, ban + release seat).
 - Sensor online: `sensorStatusModel.EFFECTIVE_ONLINE` (is_online AND last_seen within `SENSOR_STALE_SECONDS`, default 60) is what the API returns as `is_online`. A 15 s sweep in `server.js` (`telemetryService.sweepStaleSensors`) marks silent nodes offline and broadcasts `table:update`.
 - Bans: `occupantsModel.EFFECTIVE_STATUS` makes every read treat an ended ban as ACTIVE; strikes = violations after `occupants.strikes_since` (`violationsModel.countStrikes`).
-- Retention: `violationsService.cleanupOldViolations` runs at startup and every 24 h from `server.js`, deleting violations older than `VIOLATION_RETENTION_DAYS` (default 30). Bans live on the occupant row, so a running ban still ends at `ban_until`.
+- Retention (`services/retentionService.js`, timers in `server.js`, each runs once at startup):
+  - every 24 h, `cleanupPersonalData`: older than `VIOLATION_RETENTION_DAYS` (30) -> delete violations, set `incidents.occupant_id = NULL`, delete released `table_assignments`. Active seats and bans (on the occupant row, ends at `ban_until`) are untouched.
+  - every hour, `cleanupOldReadings`: delete `noise_readings` older than `NOISE_READINGS_RETENTION_DAYS` (7) in batches of 50,000.
+- Consent: `POST /api/client/register` needs `consent: true` (400 otherwise) and sets `occupants.consented_at` (migration 013). Resending the setup email doesn't change it. Admins see "Consent: <date>" or "Not recorded".
 - Classification: loud table -> `audio-request` -> device WAV -> `mlClient.js` (X-API-Key, 15 s timeout) -> label stored on `sensor_status`; kept until the table is quiet.
 
 ## 6. Done vs. not done
-Done in this revision: input validation everywhere, consistent `{ error }` responses, helmet, rate limits, production env checks, CORS patterns, log redaction, admin invite code, ban expiry + strike reset (migration 012), CHECK constraints and indexes, export filters + JSON + CSV injection guard, SQL-side analytics with viewer timezone, telemetry fixes (gap restart, single clock, label kept, ordered processing, no deadlock), realistic idempotent seed, 67 API tests, occupant self-signup only (admins can't create occupants or change their email; unverified occupants can't be seated), 30-day violation retention, unified responsive UI with loading/empty/error states, lazy routes, 404 page, firmware secrets.h + non-blocking reconnect with backoff, ML API key + Dockerfile, deployment docs.
+Done in this revision: input validation everywhere, consistent `{ error }` responses, helmet, rate limits, production env checks, CORS patterns, log redaction, admin invite code, ban expiry + strike reset (migration 012), CHECK constraints and indexes, export filters + JSON + CSV injection guard, SQL-side analytics with viewer timezone, telemetry fixes (gap restart, single clock, label kept, ordered processing, no deadlock), realistic idempotent seed, 67 API tests, occupant self-signup only (admins can't create occupants or change their email; unverified occupants can't be seated), 30-day violation retention (also unlinks old incidents and deletes old seat history), 7-day raw readings retention, registration consent notice + `consented_at`, unified responsive UI with loading/empty/error states, lazy routes, 404 page, firmware secrets.h + non-blocking reconnect with backoff, ML API key + Dockerfile, deployment docs.
 
 Not done / open:
 - Real hardware test of the new firmware (Wi-Fi/MQTT reconnect, audio timing, LEDs) - **unverified**.
@@ -82,7 +85,9 @@ Not done / open:
 - Ban policy (owner's choice): bans end at `ban_until`, strikes reset after a ban, banning releases the seat, admins can lift bans early.
 - Admin sign-up protected by an invite code (owner's choice).
 - Occupants create their own accounts; admins cannot create them, and only verified occupants with a password can be seated (owner's choice). Old rows without an email were left as they are.
-- Violations are kept 30 days (`VIOLATION_RETENTION_DAYS`), then deleted; strikes therefore count only that period. Incidents and the incidents export still name the occupant after their violation is deleted (left as is; owner to decide).
+- Violations are kept 30 days (`VIOLATION_RETENTION_DAYS`), then deleted; strikes therefore count only that period. After 30 days incidents also lose their occupant and released seat history is deleted (owner's choice).
+- Raw noise readings are kept 7 days (`NOISE_READINGS_RETENTION_DAYS`) for Neon's free 1 GB (owner's choice). Analytics and readings exports only cover that window.
+- Occupants must agree to a privacy notice (RA 10173) to register; `consented_at` records when (owner's choice).
 - Exports: CSV and JSON only (owner removed XLSX to avoid a new dependency).
 - Broker in docs: HiveMQ until its shutdown, with switch steps (owner's choice).
 - ML stays optional and free-first (owner's choice).
@@ -94,4 +99,4 @@ Shortest demo without hardware: run API + web app, log in as admin, open Live Ov
 Honest answers: dB values are uncalibrated estimates; the classifier is unvalidated; tests cover the API (67) and a browser click-through, not hardware; the WebSocket token is in the URL because browsers can't set headers there, and logs hide it.
 
 ## 11. Database migrations
-001_admins, 002_tables, 003_occupants, 004_table_assignments, 005_noise_readings, 006_incidents, 007_violations, 008_sensor_status, 009_realtime_state, 010_ml_classification, 011_client_accounts, 012_bans_constraints_indexes (strikes_since, ban/constraint checks, indexes).
+001_admins, 002_tables, 003_occupants, 004_table_assignments, 005_noise_readings, 006_incidents, 007_violations, 008_sensor_status, 009_realtime_state, 010_ml_classification, 011_client_accounts, 012_bans_constraints_indexes (strikes_since, ban/constraint checks, indexes), 013_occupant_consent (occupants.consented_at).
