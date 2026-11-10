@@ -8,9 +8,14 @@ export function OccupantTable({ occupants, onAssign, onRelease, onEdit, onDelete
     {
       key: "status",
       label: "Status",
-      render: o => o.status === "BANNED"
-        ? <span className="badge badge-crit" title={`Ban ends ${formatDate(o.ban_until)}`}>BANNED until {formatDate(o.ban_until)}</span>
-        : <span className="badge badge-safe">ACTIVE</span>
+      render: o => (
+        <div className="row-inline">
+          {o.status === "BANNED"
+            ? <span className="badge badge-crit" title={`Ban ends ${formatDate(o.ban_until)}`}>BANNED until {formatDate(o.ban_until)}</span>
+            : <span className="badge badge-safe">ACTIVE</span>}
+          {!o.account_ready && <span className="badge badge-neu" title="Hasn't verified their email and set a password yet">Unverified</span>}
+        </div>
+      )
     },
     { key: "table", label: "Table", render: o => (o.table ? tableLabel(o.table) : <span className="muted">Unassigned</span>) },
     {
@@ -31,7 +36,17 @@ export function OccupantTable({ occupants, onAssign, onRelease, onEdit, onDelete
           {o.status === "BANNED" && <button type="button" className="btn btn-sm" onClick={() => onLiftBan(o)}>Lift ban</button>}
           {o.table
             ? <button type="button" className="btn btn-sm" onClick={() => onRelease(o)}>Release</button>
-            : <button type="button" className="btn btn-sm" onClick={() => onAssign(o)} disabled={o.status === "BANNED"}>Assign</button>}
+            : (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => onAssign(o)}
+                disabled={o.status === "BANNED" || !o.account_ready}
+                title={!o.account_ready ? "This occupant hasn't finished setting up their account." : undefined}
+              >
+                Assign
+              </button>
+            )}
           <button type="button" className="btn btn-sm btn-icon" onClick={() => onEdit(o)} aria-label={`Edit ${o.full_name}`}><i className="ti ti-edit" /></button>
           <button type="button" className="btn btn-sm btn-icon btn-danger" onClick={() => onDelete(o)} aria-label={`Delete ${o.full_name}`}><i className="ti ti-trash" /></button>
         </div>

@@ -43,8 +43,7 @@ export default function Occupants() {
   };
 
   const saveOccupant = async payload => {
-    if (editModal.occupant) await occupantsApi.update(editModal.occupant.id, payload);
-    else await occupantsApi.create(payload);
+    await occupantsApi.update(editModal.occupant.id, payload);
     showToast("Occupant saved");
     setEditModal({ open: false, occupant: null });
     occupantsQuery.reload();
@@ -88,11 +87,7 @@ export default function Occupants() {
 
   return (
     <div className="page">
-      <Topbar title="Occupants" subtitle="Who sits where, and their violation record">
-        <button type="button" className="btn btn-primary" onClick={() => setEditModal({ open: true, occupant: null })}>
-          <i className="ti ti-plus" /> New occupant
-        </button>
-      </Topbar>
+      <Topbar title="Occupants" subtitle="Who sits where, and their violation record. Occupants sign up themselves on the client portal." />
 
       <div className="card card-flush">
         <div className="card-section">
@@ -109,7 +104,7 @@ export default function Occupants() {
           loadingLabel="Loading occupants..."
           emptyProps={query
             ? { icon: "ti-search", title: "No matches", subtitle: `Nobody matches "${query}".` }
-            : { icon: "ti-users", title: "No occupants yet", subtitle: "Create an occupant record to assign them to a table." }}
+            : { icon: "ti-users", title: "No occupants yet", subtitle: "Occupants appear here after they sign up on the client portal." }}
         >
           {data => (
             <OccupantTable

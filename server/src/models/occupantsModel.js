@@ -4,8 +4,10 @@ import { query } from "../config/db.js";
 // column list, so the status shown is always correct even before the row
 // itself is updated (see liftExpiredBans below).
 export const EFFECTIVE_STATUS = "CASE WHEN status = 'BANNED' AND ban_until <= NOW() THEN 'ACTIVE' ELSE status END";
+// account_ready: the occupant verified their email and set a password, so
+// they finished signing up themselves (required before being seated).
 const COLUMNS = `id, full_name, email, contact, ${EFFECTIVE_STATUS} AS status, ban_started_at, ban_until,
-  strikes_since, created_at, updated_at`;
+  strikes_since, (email_verified AND password_hash IS NOT NULL) AS account_ready, created_at, updated_at`;
 
 function runnerFor(client) {
   return client || { query };
@@ -38,29 +40,16 @@ export async function findByIdForUpdate(id, client) {
   return rows[0] || null;
 }
 
-export async function findByEmail(email) {
-  const { rows } = await query(`SELECT ${COLUMNS} FROM occupants WHERE LOWER(email) = LOWER($1)`, [email]);
-  return rows[0] || null;
-}
-
-export async function create({ full_name, email, contact }) {
-  const { rows } = await query(
-    `INSERT INTO occupants (full_name, email, contact, status) VALUES ($1, $2, $3, 'ACTIVE') RETURNING ${COLUMNS}`,
-    [full_name, email || null, contact || ""]
-  );
-  return rows[0];
-}
-
-export async function update(id, { full_name, email, contact }) {
+// Admins can't change an occupant's email: it is the occupant's login.
+export async function update(id, { full_name, contact }) {
   const { rows } = await query(
     `UPDATE occupants
      SET full_name = COALESCE($2, full_name),
-         email = CASE WHEN $3 THEN $4 ELSE email END,
-         contact = COALESCE($5, contact),
+         contact = COALESCE($3, contact),
          updated_at = NOW()
      WHERE id = $1
      RETURNING ${COLUMNS}`,
-    [id, full_name ?? null, email !== undefined, email ?? null, contact ?? null]
+    [id, full_name ?? null, contact ?? null]
   );
   return rows[0] || null;
 }

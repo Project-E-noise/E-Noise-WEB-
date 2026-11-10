@@ -15,6 +15,8 @@ async function serializeOccupant(occupant) {
     full_name: occupant.full_name,
     email: occupant.email,
     contact: occupant.contact,
+    // False until the occupant verified their email and set a password.
+    account_ready: Boolean(occupant.account_ready),
     status: occupant.status,
     ban_started_at: occupant.ban_started_at,
     // Only show the ban end date while the ban is active.
@@ -33,12 +35,6 @@ async function findOrFail(id) {
   return occupant;
 }
 
-function optionalEmail(value) {
-  if (value === undefined) return undefined;
-  if (value === null || value === "") return null;
-  return check.email(value, "Email");
-}
-
 export async function listOccupants(query = {}) {
   const q = check.optionalText(query.q, "Search", { max: 100 });
   const occupants = await occupantsModel.findAll({ q });
@@ -49,23 +45,17 @@ export async function getOccupant(id) {
   return serializeOccupant(await findOrFail(id));
 }
 
-export async function createOccupant(body = {}) {
-  const full_name = check.text(body.full_name, "Full name", { max: 100 });
-  const email = optionalEmail(body.email) ?? null;
-  const contact = check.optionalText(body.contact, "Contact", { max: 100 });
-  if (email && await occupantsModel.findByEmail(email)) throw conflict("An occupant with that email already exists.");
-  return serializeOccupant(await occupantsModel.create({ full_name, email, contact }));
-}
+// There is no createOccupant: occupants sign up themselves on the client
+// portal (/client/register), so every new occupant has an email.
 
 export async function updateOccupant(id, body = {}) {
   const occupant = await findOrFail(id);
   const full_name = body.full_name === undefined ? undefined : check.text(body.full_name, "Full name", { max: 100 });
-  const email = optionalEmail(body.email);
   const contact = body.contact === undefined ? undefined : check.optionalText(body.contact, "Contact", { max: 100 });
 
-  if (email) {
-    const matching = await occupantsModel.findByEmail(email);
-    if (matching && matching.id !== occupant.id) throw conflict("An occupant with that email already exists.");
+  // The email is the occupant's login; only they can change it.
+  if (body.email !== undefined && String(body.email ?? "").trim().toLowerCase() !== String(occupant.email ?? "").toLowerCase()) {
+    throw badRequest("An occupant's email can't be changed by an admin.");
   }
 
   // Bans are set automatically by the 3-violation rule. An admin can only end one early.
@@ -74,7 +64,7 @@ export async function updateOccupant(id, body = {}) {
     if (occupant.status === "BANNED") await occupantsModel.liftBan(occupant.id);
   }
 
-  const updated = await occupantsModel.update(occupant.id, { full_name, email, contact });
+  const updated = await occupantsModel.update(occupant.id, { full_name, contact });
   return serializeOccupant(updated);
 }
 
@@ -89,6 +79,7 @@ export async function assignOccupant(occupantId, tableId) {
   const table = await tablesModel.findById(check.id(tableId, "Table id"));
   if (!table) throw notFound("Table not found.");
 
+  if (!occupant.account_ready) throw conflict("This occupant hasn't finished setting up their account.");
   if (occupant.status === "BANNED") throw conflict("This occupant is currently banned and cannot be assigned to a table.");
   if (await tableAssignmentsModel.activeForTable(table.id)) throw conflict("That table already has an assigned occupant.");
   if (await tableAssignmentsModel.activeForOccupant(occupant.id)) throw conflict("That occupant is already assigned to a table.");

@@ -6,7 +6,6 @@ const router = Router();
 router.use(requireAuth);
 
 router.get("/", occupantsController.list);
-router.post("/", occupantsController.create);
 router.get("/:id", occupantsController.get);
 router.put("/:id", occupantsController.update);
 router.delete("/:id", occupantsController.remove);

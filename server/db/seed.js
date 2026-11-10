@@ -54,9 +54,9 @@ const OCCUPANTS = [
   { key: "maria", full_name: "Maria Santos", email: CLIENT_EMAIL, client: true },
   { key: "pedro", full_name: "Pedro Reyes", email: "pedro.reyes@example.com" },
   { key: "ana", full_name: "Ana Villanueva", email: "ana.villanueva@example.com" },
-  { key: "jose", full_name: "Jose Mercado", email: null },
+  { key: "jose", full_name: "Jose Mercado", email: "jose.mercado@example.com" },
   { key: "carmen", full_name: "Carmen Bautista", email: "carmen.bautista@example.com" },
-  { key: "miguel", full_name: "Miguel Garcia", email: null },
+  { key: "miguel", full_name: "Miguel Garcia", email: "miguel.garcia@example.com" },
   { key: "liza", full_name: "Liza Ramos", email: "liza.ramos@example.com" }
 ];
 
@@ -140,9 +140,12 @@ async function upsertOccupants(client) {
   const ids = {};
   const clientHash = CLIENT_PASSWORD ? await bcrypt.hash(CLIENT_PASSWORD, 10) : null;
   for (const o of OCCUPANTS) {
-    const existing = o.email
-      ? await client.query("SELECT id FROM occupants WHERE LOWER(email) = LOWER($1)", [o.email])
-      : await client.query("SELECT id FROM occupants WHERE full_name = $1 AND email IS NULL", [o.full_name]);
+    // Older seeds left two demo occupants without an email: give them theirs.
+    await client.query(
+      "UPDATE occupants SET email = $2, updated_at = NOW() WHERE full_name = $1 AND email IS NULL AND NOT EXISTS (SELECT 1 FROM occupants WHERE LOWER(email) = LOWER($2))",
+      [o.full_name, o.email]
+    );
+    const existing = await client.query("SELECT id FROM occupants WHERE LOWER(email) = LOWER($1)", [o.email]);
     if (existing.rows[0]) {
       ids[o.key] = existing.rows[0].id;
       continue;
