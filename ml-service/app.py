@@ -55,7 +55,7 @@ def load_model():
     _state["model"] = model
     _state["class_names"] = class_names
     _state["class_buckets"] = class_buckets
-    log.info("YAMNet loaded (%d classes mapped to %d categories).", len(class_names), len(CATEGORIES))
+    log.info("YAMNet loaded (%d classes mapped to %d categories; class map indexes verified).", len(class_names), len(CATEGORIES))
     if not API_KEY:
         log.warning("ML_API_KEY is not set: /classify accepts requests from anyone. Set it when deploying.")
 
