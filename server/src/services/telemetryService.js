@@ -20,6 +20,8 @@ export const MAX_READING_GAP_SECONDS = 5;
 // Ask for a new audio clip at the streak start, then this often.
 export const AUDIO_RECLASSIFY_SECONDS = 5;
 // LABEL_WAIT_SECONDS (8 s wait for a first label) lives in violationRules.js.
+// A clip on /audio is only accepted this long after we asked for one.
+export const AUDIO_ACCEPT_WINDOW_SECONDS = 10;
 
 const secondsBetween = (later, earlier) => (new Date(later).getTime() - new Date(earlier).getTime()) / 1000;
 const iso = date => new Date(date).toISOString();
@@ -210,10 +212,19 @@ export async function ingestAudioClip(nodeId, wavBuffer, { now: clock } = {}) {
     return;
   }
 
+  // Only clips we asked for recently are classified. Anything else (a
+  // replayed or forged message on the audio topic) is dropped unread.
+  const now = clock ? new Date(clock) : new Date();
+  const status = await sensorStatusModel.findByTableId(table.id);
+  const asked = status?.last_audio_requested_at;
+  if (!asked || secondsBetween(now, asked) > AUDIO_ACCEPT_WINDOW_SECONDS) {
+    console.warn(`[telemetry] Ignoring unrequested audio clip from ${nodeId}.`);
+    return;
+  }
+
   const result = await classifyAudioClip(wavBuffer);
   if (!result) return; // ML service asleep or down: everything else keeps working
 
-  const now = clock ? new Date(clock) : new Date();
   await sensorStatusModel.appendStreakLabel(table.id, { ...result, at: iso(now) });
   broadcastTableUpdate(await serializeTable(table));
 }

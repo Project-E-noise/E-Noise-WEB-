@@ -58,7 +58,7 @@ export async function login(body = {}) {
   if (admin.status === "DISABLED") throw forbidden("This administrator account has been disabled.");
   if (!admin.is_verified) throw forbidden("Email verification required. Please verify your email before logging in.");
 
-  return { token: signSession(admin.id, "admin"), admin: publicAdmin(admin) };
+  return { token: signSession(admin.id, "admin", { version: admin.token_version ?? 0 }), admin: publicAdmin(admin) };
 }
 
 export async function verifyEmail(token) {

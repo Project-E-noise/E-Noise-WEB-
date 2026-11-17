@@ -7,9 +7,15 @@ export function generateVerificationToken() {
   return crypto.randomBytes(32).toString("hex");
 }
 
-/** Signs a login session. role is "admin" or "client". */
-export function signSession(id, role) {
-  return jwt.sign({ sub: id, role }, env.jwtSecret, { expiresIn: env.jwtExpiresIn, algorithm: "HS256" });
+/**
+ * Signs a login session. role is "admin" or "client". Admin tokens carry
+ * the admin's token_version ("tv"): logging out bumps it, which revokes
+ * every earlier token. Admin sessions use ADMIN_JWT_EXPIRES_IN (1 day).
+ */
+export function signSession(id, role, { version = 0 } = {}) {
+  const payload = role === "admin" ? { sub: id, role, tv: version } : { sub: id, role };
+  const expiresIn = role === "admin" ? env.adminJwtExpiresIn : env.jwtExpiresIn;
+  return jwt.sign(payload, env.jwtSecret, { expiresIn, algorithm: "HS256" });
 }
 
 /** Returns the token payload, or null if the token is missing, invalid or expired. */

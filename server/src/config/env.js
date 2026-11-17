@@ -110,6 +110,8 @@ export const env = {
   corsOrigins,
   jwtSecret,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
+  // Admin sessions are shorter (and can be revoked, see token_version).
+  adminJwtExpiresIn: process.env.ADMIN_JWT_EXPIRES_IN || "1d",
   clientUrl: (process.env.CLIENT_URL || "http://localhost:5173").replace(/\/+$/, ""),
   databaseUrl: process.env.DATABASE_URL || null,
   // Admin registration needs this code. If it is empty, nobody can register

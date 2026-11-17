@@ -16,6 +16,8 @@ export async function verifyAdminToken(token) {
   if (!admin) return { ok: false, reason: "not_found" };
   if (admin.status === "DISABLED") return { ok: false, reason: "disabled" };
   if (!admin.is_verified) return { ok: false, reason: "unverified" };
+  // Issued before the last logout (token_version was bumped): revoked.
+  if ((payload.tv ?? 0) !== (admin.token_version ?? 0)) return { ok: false, reason: "invalid" };
 
   return { ok: true, admin: adminsModel.publicAdmin(admin) };
 }
