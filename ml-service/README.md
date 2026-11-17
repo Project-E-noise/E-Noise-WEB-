@@ -12,8 +12,11 @@ pinned: false
 # Project E-Noise — ML classification service (Phase 7)
 
 A small FastAPI microservice that classifies a short audio clip into one of
-this project's four noise categories using Google's pretrained **YAMNet**
-model (521-class AudioSet classifier, loaded from TensorFlow Hub).
+this project's five noise categories (`Loud Conversation`, `Mobile Phone Noise`,
+`Music`, `Impact Noise`, `Ambient Baseline`) using Google's pretrained **YAMNet**
+model (521-class AudioSet classifier, loaded from TensorFlow Hub). The backend
+uses the label to decide whether a loud event counts as a violation: only
+Loud Conversation, Mobile Phone Noise and Music can.
 
 The Node backend (`server/`) never runs inference itself — it forwards
 each WAV clip it receives from a table's ESP32 node over MQTT to this
@@ -24,9 +27,10 @@ storage" rule).
 
 ## Status: prototype-stage classifier, not a fine-tuned model
 
-This maps YAMNet's 521 pretrained AudioSet class names to the project's 4
-categories with a hand-authored keyword table (`category_mapping.py`) —
-there is no labeled Project E-Noise audio behind it yet. Treat its output
+This maps YAMNet's 521 pretrained AudioSet classes to the project's 5
+categories with explicit class-name lists plus two index ranges
+(`category_mapping.py`) — there is no labeled Project E-Noise audio behind
+it yet. Treat its output
 as a reasonable starting signal for the live demo, not a validated
 accuracy number for your methodology writeup. See "Fine-tuning later" below
 for the intended upgrade path once you've collected labeled clips.
@@ -75,11 +79,9 @@ an earlier download was interrupted: delete the folder named in the error
    `ML_SERVICE_URL` on the backend. Check `https://<...>.hf.space/health`.
 
 Free Spaces go to sleep when unused and take a while to wake up. The backend
-gives up on a request after 15 s and simply keeps working without a label
-(incidents then use the fallback category).
-If this service isn't running, the backend logs a warning and keeps
-working without classification — it's an enhancement, not a hard
-dependency of Phases 5/6.
+gives up on a request after 15 s. If this service isn't answering, the backend
+logs a warning and keeps working, but every sustained loud event is then logged
+as UNVERIFIED (no strike, no critical bulb) until an admin reviews it.
 
 ## API
 
@@ -92,9 +94,10 @@ Response:
 ```json
 { "category": "Loud Conversation", "confidence": 0.81, "top_class": "Conversation" }
 ```
-`category` is always one of the four project categories. `top_class` is
-YAMNet's own raw top AudioSet label, included for debugging/logging only —
-the Node backend ignores it.
+`category` is always one of the five project categories. `top_class` is
+YAMNet's own top AudioSet class inside the winning category; the backend
+stores it on the incident so admins can see what was heard ("Door",
+"Typing"...) when reviewing filtered events.
 
 ### `GET /health`
 Returns `{"status": "ok", "model_loaded": true}` once YAMNet has finished
@@ -102,10 +105,29 @@ loading (loading happens once at startup, not per-request).
 
 ## How the mapping works
 
-`category_mapping.py` buckets YAMNet's 521 class names by keyword
-matching (e.g. "speech", "conversation", "chatter" -> Loud Conversation;
-"telephone", "ringtone", "cellphone" -> Mobile Phone Noise; "bang", "slam",
-"knock", "thud" -> Impact Noise; everything else -> Ambient Baseline).
+`category_mapping.py` assigns every one of YAMNet's 521 classes explicitly:
+- **Loud Conversation**: Speech, Conversation, Shout, Yell, Bellow, Whoop,
+  Screaming, Laughter, Giggle, Snicker, Belly laugh, Chuckle, Cheering,
+  Chatter, Crowd, Hubbub, Children playing/shouting... (23 classes). Crying,
+  whispering, sighing, coughing are deliberately not included.
+- **Mobile Phone Noise**: Telephone, Telephone bell ringing, Ringtone,
+  Telephone dialing, Dial tone, Busy signal (6). Not Vibration, Doorbell,
+  Water tap, Engine knocking, alarms or beeps.
+- **Music**: the class-map ranges 24-31 (Singing ... Rapping) and 132-276
+  (Music ... Scary music), minus bells, chimes and a tuning fork (-> Ambient)
+  and rattle / scratching / guitar tapping (-> Impact) (142).
+- **Impact Noise**: Door, Slam, Knock, Tap, Bang, Thump, Smash, Breaking,
+  Glass, Dishes, Cutlery, Drawer, Cupboard, Scrape, Clatter... (34).
+- **Ambient Baseline**: everything else (typing, air conditioning, fans,
+  traffic, footsteps, vibration, wind, silence...) (316).
+
+`verify_class_map()` checks the loaded class map against the expected names
+at the range boundaries, so a different model version can't silently shift
+the indexes. `python category_mapping.py` prints the boundary names and the
+bucket sizes; `python -m unittest discover -s tests` runs the 16 mapping
+tests over all 521 classes (`tests/yamnet_class_map.csv` is the model's own
+class map).
+
 `app.py` averages YAMNet's per-frame scores across the clip, then chooses
 the category whose single strongest matching YAMNet class has the highest
 score. It deliberately does not sum scores across a bucket, because Ambient
@@ -130,7 +152,7 @@ real study-hub recordings:
    your 4 categories) on those embeddings — this is standard YAMNet
    transfer learning and needs far less data than training a classifier
    from raw audio.
-3. Swap `category_mapping.py`'s keyword bucketing for a call into your
+3. Swap `category_mapping.py`'s class bucketing for a call into your
    trained classifier head in `app.py`.
 
 `finetune_stub.py` sketches step 1-2 as a starting point — it is

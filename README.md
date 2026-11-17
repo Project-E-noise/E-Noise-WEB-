@@ -2,9 +2,9 @@
 
 Noise monitoring for study-hub tables. Each table has an ESP32 sensor node with a
 MAX9814 microphone and 11 LEDs. The node sends its sound level every second; the
-backend decides the LED state, confirms incidents when a table stays too loud for
-10 seconds, tracks violations (3 strikes = one-week ban) and shows everything live
-on a web dashboard. Study-hub members can sign in to a client portal to see their
+backend decides the LED state, times loud streaks, asks the sound classifier
+whether a sustained loud event is a violation sound, tracks violations (3 strikes =
+one-week ban) and shows everything live on a web dashboard. Study-hub members can sign in to a client portal to see their
 own activity and violations.
 
 | Part | Folder | Tech |
@@ -12,7 +12,7 @@ own activity and violations.
 | Admin dashboard + client portal | `capstone/` | React 19, Vite, React Router, Chart.js |
 | REST API + WebSocket + MQTT ingestion | `server/` | Node 20+, Express, PostgreSQL (`pg`, no ORM), JWT, MQTT.js, ws |
 | Sensor node firmware | `firmware/enoise_node/` | ESP32 Arduino, PubSubClient, ArduinoJson |
-| Noise classifier (optional add-on) | `ml-service/` | Python, FastAPI, TensorFlow YAMNet |
+| Noise classifier (decides violations) | `ml-service/` | Python, FastAPI, TensorFlow YAMNet |
 
 ## Architecture
 
@@ -30,7 +30,8 @@ own activity and violations.
                                             +---------------------+
                                                |  WAV clip (only when loud)
                                                v
-                                         ml-service (YAMNet, optional)
+                                         ml-service (YAMNet: is this loud
+                                         event a violation sound?)
 ```
 
 MQTT topics (`server/src/mqtt/topics.js`):
@@ -41,7 +42,7 @@ MQTT topics (`server/src/mqtt/topics.js`):
 | `enoise/<node>/status` | device -> API, retained, also the Last Will | `{"online": true}` |
 | `enoise/<node>/led` | API -> device, retained | `{"green":5,"yellow":3,"red":0,"critical":false}` |
 | `enoise/<node>/audio-request` | API -> device | `{"request":"capture"}` |
-| `enoise/<node>/audio` | device -> API | 1 s WAV clip (binary), only after a request |
+| `enoise/<node>/audio` | device -> API | 1 s WAV clip (binary); accepted only within 10 s of a request |
 
 `<node>` is the table's **Sensor node ID** (e.g. `NODE-001`). Adding a table in
 Table Configuration is all it takes to register a node.
@@ -50,30 +51,59 @@ Table Configuration is all it takes to register a node.
 
 - **LEDs:** green/yellow/red follow each reading and the table's warning/critical
   thresholds (warning must be lower than critical).
-- **Critical confirmation:** the critical bulb and a CONFIRMED incident only happen after
-  the level stays at or above the critical threshold for `confirmation_seconds`
-  (default 10) without a gap in readings. State is kept in the database, so a
-  restart doesn't lose it.
+- **Violation gating (the dB level triggers, the sound type decides):** a loud
+  streak starts at the first reading at/above the critical threshold and survives
+  dips of up to 2 s; a silence of more than 5 s discards it. Audio is requested at
+  the streak start and every 5 s. Once the streak lasted `confirmation_seconds`
+  (default 10; 4 s once a confident phone label arrived, `PHONE_CONFIRMATION_SECONDS`)
+  the labels collected so far decide (`server/src/utils/violationRules.js`):
+  - no label -> **UNVERIFIED** (`no_classification`); only labels under
+    `MIN_CONFIDENCE` (0.5) -> **UNVERIFIED** (`low_confidence`);
+  - a strict majority of confident labels in `VIOLATION_CATEGORIES` -> **CONFIRMED**
+    (a violation: strike, critical bulb while the streak is still going);
+  - otherwise (door slam, cough, typing, air-con, traffic, a tie...) -> **IGNORED**
+    (`non_violation_category`). A PAUSED table always gives IGNORED (`table_paused`).
+
+  While the ML service answers, the engine waits up to 8 s for a first label; when
+  it is down it decides at once. IGNORED and UNVERIFIED events never light the bulb,
+  never create a strike and never count toward a ban; they appear under the
+  **Filtered** tab of Incident Logs for review ("Confirm as violation" needs a
+  violation category and then creates the strike). After a decided streak the table
+  has a 120 s cooldown (`VIOLATION_COOLDOWN_SECONDS`). The incident stores the peak
+  dB of the streak, the YAMNet top class and the filter reason. State is kept in
+  `sensor_status`, so a restart doesn't lose it.
+- **Which sounds are violations:** `VIOLATION_CATEGORIES` in
+  `server/src/data/constants.js` (`Loud Conversation`, `Mobile Phone Noise`, `Music`).
+  Remove an entry to stop it counting. `Impact Noise` and `Ambient Baseline` are
+  never violations.
 - **Occupants:** occupants create their own accounts on the client portal; admins
   can't create them or change their email. Registration requires ticking a privacy
   notice (Data Privacy Act of 2012); the time is stored in `occupants.consented_at`
   and shown to admins ("Not recorded" for older accounts). Only an occupant who
   verified their email and set a password can be assigned to a table (others show
   as "Unverified").
-- **Violations and bans:** every CONFIRMED incident linked to an occupant is a violation.
-  The 3rd strike bans the occupant for one week and releases them from their table.
-  The ban ends by itself at `ban_until`, and strikes start again from 0. Violations
-  are kept for `VIOLATION_RETENTION_DAYS` (default 30) and then deleted by a daily
-  cleanup, so strikes only count that period; a running ban is not affected. The same
-  job removes the occupant from incidents older than that and deletes seat history
-  released that long ago (current seats are kept). An admin can lift a ban early.
-  Incident + violation + ban are saved in one transaction.
+- **Violations and bans:** a CONFIRMED incident linked to an occupant is a violation
+  (strike), at most `MAX_STRIKES_PER_DAY` (default 1) per occupant in any 24 h, so
+  continuous noise can't produce a ban within minutes (later CONFIRMED incidents that
+  day are still logged, just not as strikes). The occupant is the one seated when the
+  streak started. The 3rd strike inside the 30-day window bans the occupant for one
+  week and releases them from their table. The ban ends by itself at `ban_until`, and
+  strikes start again from 0. If an admin moves one of the ban's incidents away from
+  CONFIRMED (or deletes it), its violation is deleted and the ban's strikes are
+  recounted; below 3 the ban is lifted and the remaining strikes count again.
+  Violations are kept for `VIOLATION_RETENTION_DAYS` (default 30) and then deleted by
+  a daily cleanup, so strikes only count that period; a running ban is not affected.
+  The same job removes the occupant from incidents older than that and deletes seat
+  history released that long ago (current seats are kept). An admin can lift a ban
+  early. Incident + violation + ban are saved in one transaction.
 - **Raw readings:** `noise_readings` older than `NOISE_READINGS_RETENTION_DAYS`
   (default 7) are deleted every hour in batches, to stay inside Neon's free 1 GB.
   Incidents, violations and sensor status are separate and not affected. Analytics
   and readings exports can therefore only cover the last 7 days.
-- **Categories:** exactly four, spelled identically in JS, SQL, firmware and Python:
-  `Loud Conversation`, `Mobile Phone Noise`, `Impact Noise`, `Ambient Baseline`.
+- **Categories:** exactly five, spelled identically in JS, SQL and Python (checked by
+  `server/tests/categories-sync.test.js`): `Loud Conversation`, `Mobile Phone Noise`,
+  `Music`, `Impact Noise`, `Ambient Baseline`. Incident statuses: `CONFIRMED`,
+  `IGNORED`, `UNVERIFIED`, `DISMISSED` (and legacy `MONITORING`).
 
 ## Local setup
 
@@ -118,10 +148,12 @@ npm install
 npm run dev              # http://127.0.0.1:5173
 ```
 
-### 4. ML service (optional)
+### 4. ML service
 
-The backend works without it; incidents then get the fallback category
-"Loud Conversation". See `ml-service/README.md`.
+The classifier decides whether a loud event is a violation. The backend runs
+without it, but every sustained loud event is then logged as **UNVERIFIED** (no
+strike, no critical bulb) until an admin confirms it. See `ml-service/README.md`.
+Its mapping tests run with `python -m unittest discover -s tests` in `ml-service/`.
 
 ```bash
 cd ml-service
@@ -166,7 +198,8 @@ Running it again adds nothing new.
 | `PORT` | | Default 5000 (Render sets it automatically) |
 | `DATABASE_URL` | yes | Postgres connection string. Neon: add `?sslmode=require` |
 | `JWT_SECRET` | yes in production | 32+ random characters; the server refuses to start in production without it |
-| `JWT_EXPIRES_IN` | | Session length, default `7d` |
+| `JWT_EXPIRES_IN` | | Client session length, default `7d` |
+| `ADMIN_JWT_EXPIRES_IN` | | Admin session length, default `1d`. Admin tokens are revoked on logout (`admins.token_version`) |
 | `CORS_ORIGIN` | yes in production | Comma-separated allowed website origins. One `*` per entry is allowed, e.g. `https://enoise-*-yourname.vercel.app` for Vercel previews |
 | `CLIENT_URL` | yes in production | Website address used inside emails (no trailing slash) |
 | `ADMIN_SIGNUP_CODE` | | Invite code required on `/register`. Empty = admin registration disabled |
@@ -174,11 +207,15 @@ Running it again adds nothing new.
 | `EMAIL_FROM` | | Sender, e.g. `E-Noise <you@example.com>` (must be a verified sender in Brevo) |
 | `BREVO_API_KEY` | with brevo | Brevo API key |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | with smtp | SMTP server (local development only; Render free blocks SMTP) |
-| `HIVEMQ_HOST`, `HIVEMQ_PORT`, `HIVEMQ_USERNAME`, `HIVEMQ_PASSWORD` | | MQTT broker. Empty host = MQTT off |
+| `HIVEMQ_HOST`, `HIVEMQ_PORT`, `HIVEMQ_USERNAME`, `HIVEMQ_PASSWORD` | | MQTT broker (backend credentials; nodes get their own, see Security notes). Empty host = MQTT off |
 | `MQTT_PROTOCOL` | | `mqtts` (TLS, default) or `mqtt` (local test broker) |
-| `ML_SERVICE_URL` | | ML service address, default `http://localhost:8001` |
-| `ML_API_KEY` | | Shared secret sent as `X-API-Key` to the ML service |
-| `SENSOR_STALE_SECONDS` | | A sensor counts as offline after this many seconds without a reading (default 60) |
+| `ML_SERVICE_URL` | | ML service address. Development default `http://localhost:8001`; in production empty = no classifier (loud events become UNVERIFIED) |
+| `ML_API_KEY` | with ML in production | Shared secret sent as `X-API-Key`. In production the server refuses to start if `ML_SERVICE_URL` is set and this is empty |
+| `MIN_CONFIDENCE` | | A label only counts toward the verdict at/above this confidence, 0-1 (default `0.5`, **placeholder to tune with study-hub recordings**) |
+| `PHONE_CONFIRMATION_SECONDS` | | Sustained time once a confident phone label arrived (default `4`, never longer than the table's `confirmation_seconds`; placeholder) |
+| `VIOLATION_COOLDOWN_SECONDS` | | No new streak on a table for this long after one was decided (default `120`) |
+| `MAX_STRIKES_PER_DAY` | | Strikes one occupant can get in any rolling 24 h (default `1`) |
+| `SENSOR_STALE_SECONDS` | | A sensor counts as offline after this many seconds without a reading (default 15) |
 | `NOISE_READINGS_RETENTION_DAYS` | | Days raw noise readings are kept; older ones are deleted every hour (default 7, positive whole number) |
 | `VIOLATION_RETENTION_DAYS` | | Days a violation is kept before the daily cleanup deletes it (default 30, positive whole number) |
 | `TEST_DATABASE_URL` | for tests | Separate database whose name contains `test` (it is wiped) |
@@ -202,13 +239,19 @@ cd server
 npm test
 ```
 
-56 tests (`node:test` + `supertest`) run against a real Postgres database. The
+131 tests (`node:test` + `supertest`) run against a real Postgres database. The
 test database is wiped and migrated first. They cover every endpoint (success and
 main error cases), admin/client role checks and data scoping, the
 incident -> violation -> ban transaction (including rollback and concurrent
-incidents), ban expiry and strike reset, threshold validation, the 10-second
-confirmation engine, exports (incl. CSV formula escaping), analytics, and
-WebSocket authentication.
+incidents), ban expiry and strike reset, threshold validation, the violation-gating
+engine (`decideVerdict`, dip tolerance, reading gaps, label wait, cooldown, PAUSED
+tables, occupant at streak start, atomic label append), the daily strike cap and
+ban lift by recount, the ML client and its health tracking, the audio-request
+window, admin token revocation, exports (incl. CSV formula escaping), analytics,
+WebSocket authentication, and that the category strings match across JS, SQL and
+Python. The engine tests pass simulated times, so they run without sleeping.
+
+The ML service has 16 mapping tests: `cd ml-service && python -m unittest discover -s tests`.
 
 The frontend has no unit tests; it was checked with a Playwright click-through
 of every admin and client page at 375 px, 768 px and 1280 px (see `HANDOFF.md`).
@@ -225,10 +268,13 @@ npm run simulate -- --node NODE-002 --spike              # climbs into critical 
 npm run simulate -- --node NODE-002 --spike --seconds 40 # stops by itself
 ```
 
-With `--spike`, watch Live Overview: after ~10 s above critical the table shows the
-critical bulb, a CONFIRMED incident appears in Incident Logs, and the table's
-occupant gets a violation (Maria is on table 2 in the demo data with 2 strikes, so
-this bans her). Stop with Ctrl+C or `--seconds`.
+With `--spike`, watch Live Overview: the table card shows "Loud for 6/10 s", then
+the event is decided. The simulator sends no audio, so without the ML service the
+event is logged as **UNVERIFIED** under Incident Logs -> Filtered (no bulb, no
+strike). Open it there and use "Confirm as violation" (pick a category) to create the
+strike: Maria is on table 2 in the demo data with 2 strikes, so this bans her. With
+real nodes and the ML service running, a loud conversation is confirmed
+automatically and the critical bulb lights. Stop with Ctrl+C or `--seconds`.
 
 ## Security notes
 
@@ -253,9 +299,25 @@ this bans her). Stop with Ctrl+C or `--seconds`.
   why the app avoids injecting HTML.
 - The WebSocket gets the token as `?token=` because browsers can't set headers on
   WebSocket connections. Request logs replace any `token=` value with `[hidden]`,
-  and the WebSocket upgrade isn't logged by the API.
-- The firmware connects with TLS but skips certificate checking (`setInsecure()`);
-  load the broker's CA certificate for a real deployment.
+  and the WebSocket upgrade isn't logged by the API. A close code 4001 (rejected
+  token) signs the dashboard out.
+- Admin sessions last one day (`ADMIN_JWT_EXPIRES_IN`) and logging out revokes every
+  token of that admin (`admins.token_version` is checked on each request). Client
+  logout stays stateless.
+- Audio clips on `enoise/<node>/audio` are only classified within 10 s of the
+  backend's own `audio-request` to that node; anything else is dropped unread.
+- In production the API refuses to start with `ML_SERVICE_URL` set but `ML_API_KEY`
+  empty, so a public classifier endpoint is never called without its key.
+- The firmware checks the broker's TLS certificate against the root CA in
+  `secrets.h` (`MQTT_CA_CERT`, `setCACert()`); it does not compile without one.
+- **Per-node MQTT credentials.** Give every node its own broker user so a stolen or
+  cloned node can't publish as another table. In HiveMQ Cloud: Access Management ->
+  Credentials -> add one credential per node (e.g. username `node-001`), permission
+  type "Publish and Subscribe" restricted to the topic filter `enoise/NODE-001/#`
+  (Starter tier and above let you set per-topic permissions; Serverless only has
+  "all topics" credentials, so there the separation is only by password). Put each
+  pair in that node's `secrets.h`. The backend keeps its own credential with
+  `enoise/#`. Nothing in the server needs configuring for this.
 
 ## Deployment (free tiers)
 
@@ -378,14 +440,19 @@ each ESP32, and check the table shows "Online" in Live Overview.
 - **dB values are not calibrated.** The firmware turns microphone voltage into an
   estimated dB value using an assumed reference point. Calibrate against a sound level
   meter before treating readings as real dB(A) (`docs/HARDWARE_GUIDE.md`).
-- **The classifier is not validated.** YAMNet's general sound classes are mapped to
-  the four categories by keywords; it has not been tested on labeled study-hub audio.
+- **The classifier is not validated.** YAMNet's 521 classes are mapped to the five
+  categories by an explicit class list (`ml-service/category_mapping.py`); it has not
+  been tested on labeled study-hub audio, and `MIN_CONFIDENCE` is a placeholder.
   `ml-service/finetune_stub.py` is the planned starting point once such data exists.
+- **No neighbour crosstalk check.** A loud table can trip the sensor of the table next
+  to it. The engine has a `neighbor_louder` filter reason reserved for this, but the
+  `tables` table has no position/adjacency data yet, so the check is not implemented.
 - Logout is stateless: a copied token works until it expires (`JWT_EXPIRES_IN`).
 - Rate-limit counters are kept in memory, so they reset when the API restarts or sleeps.
 - On Render free, sensor data is lost while the API sleeps (see Keeping it awake).
-- PAUSED / OFFLINE table status is informational; readings from such a table still
-  create incidents.
+- A PAUSED table still logs loud events, as IGNORED (`table_paused`); OFFLINE status
+  is informational only.
 - Client portal date filters use whole UTC days; admin pages use the viewer's local time.
 - HiveMQ Cloud Serverless is retired on 2026-12-31 (see Deployment step 2).
-- The firmware skips TLS certificate checks (`setInsecure()`).
+- The firmware's dB calibration table (`CAL_TABLE`) holds placeholder values until
+  bench calibration; readings are shown as "dB (est.)".
