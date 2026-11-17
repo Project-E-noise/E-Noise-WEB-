@@ -3,7 +3,7 @@ import * as tablesModel from "../models/tablesModel.js";
 import * as tableAssignmentsModel from "../models/tableAssignmentsModel.js";
 import * as occupantsModel from "../models/occupantsModel.js";
 import { withTransaction } from "../config/db.js";
-import { ML_CATEGORIES, INCIDENT_STATUSES, FILTER_REASONS } from "../data/constants.js";
+import { ML_CATEGORIES, INCIDENT_STATUSES, FILTER_REASONS, VIOLATION_CATEGORIES } from "../data/constants.js";
 import { badRequest, notFound } from "../utils/errors.js";
 import * as check from "../utils/validate.js";
 import { recordViolationIfApplicable, removeViolationForIncident } from "./violationsService.js";
@@ -55,8 +55,16 @@ function readIncidentFields(body, { partial }) {
   if (has("peak_db")) fields.peak_db = check.optionalNumber(body.peak_db, "Peak dB", { min: 0, max: 200 });
   if (has("top_class")) fields.top_class = check.optionalText(body.top_class, "Top class", { max: 100, fallback: null });
   if (has("filter_reason")) fields.filter_reason = blank("filter_reason") ? null : check.oneOf(body.filter_reason, "Filter reason", FILTER_REASONS);
-  if (!partial && fields.status === "CONFIRMED" && !fields.category) throw badRequest("Choose a category for a confirmed incident.");
+  if (!partial && fields.status === "CONFIRMED") assertViolationCategory(fields.category);
   return fields;
+}
+
+// Only violation sounds can be CONFIRMED (see VIOLATION_CATEGORIES).
+function assertViolationCategory(category) {
+  if (!category) throw badRequest("Choose a category for a confirmed incident.");
+  if (!VIOLATION_CATEGORIES.includes(category)) {
+    throw badRequest(`A confirmed violation must be one of: ${VIOLATION_CATEGORIES.join(", ")}.`);
+  }
 }
 
 export async function listIncidents(query = {}) {
@@ -111,12 +119,23 @@ export async function createIncident(body = {}, { occupantAt } = {}) {
   return getIncident(created.id);
 }
 
-/** Editing the status also adds or removes the matching violation. */
+/**
+ * Editing the status also adds or removes the matching violation. Leaving
+ * CONFIRMED deletes the violation and recounts the ban; becoming CONFIRMED
+ * (e.g. "Confirm as violation" on a filtered incident) needs a violation
+ * category and then goes through the normal strike rules.
+ */
 export async function updateIncident(id, body = {}) {
   const incidentId = check.id(id, "Incident id");
   const existing = await incidentsModel.findById(incidentId);
   if (!existing) throw notFound("Incident not found.");
   const fields = readIncidentFields(body, { partial: true });
+
+  const nextStatus = fields.status ?? existing.status;
+  if (nextStatus === "CONFIRMED" && (existing.status !== "CONFIRMED" || fields.category !== undefined)) {
+    if (fields.category === null || (!fields.category && !existing.category)) throw badRequest("Choose a category to confirm this incident.");
+    assertViolationCategory(fields.category ?? existing.category);
+  }
 
   await withTransaction(async client => {
     if (existing.occupant_id) await occupantsModel.findByIdForUpdate(existing.occupant_id, client);
@@ -128,7 +147,14 @@ export async function updateIncident(id, body = {}) {
   return getIncident(incidentId);
 }
 
+/** Deleting a CONFIRMED incident also recounts the occupant's ban. */
 export async function deleteIncident(id) {
-  const removed = await incidentsModel.remove(check.id(id, "Incident id"));
-  if (!removed) throw notFound("Incident not found.");
+  const incidentId = check.id(id, "Incident id");
+  const existing = await incidentsModel.findById(incidentId);
+  if (!existing) throw notFound("Incident not found.");
+  await withTransaction(async client => {
+    if (existing.occupant_id) await occupantsModel.findByIdForUpdate(existing.occupant_id, client);
+    await removeViolationForIncident(incidentId, client);
+    await incidentsModel.remove(incidentId, client);
+  });
 }

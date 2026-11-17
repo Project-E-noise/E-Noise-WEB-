@@ -96,8 +96,8 @@ export async function update(
   return rows[0];
 }
 
-export async function remove(id) {
-  const { rowCount } = await query("DELETE FROM incidents WHERE id = $1", [id]);
+export async function remove(id, client) {
+  const { rowCount } = await runnerFor(client).query("DELETE FROM incidents WHERE id = $1", [id]);
   return rowCount > 0;
 }
 

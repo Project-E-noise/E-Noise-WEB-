@@ -67,7 +67,7 @@ test("clients only see their own logs and violations", async () => {
   await assign(clientB.id, table.id);
   // An incident for client B.
   const created = await api().post("/api/incidents").set(bearer(admin.token))
-    .send({ table_id: table.id, category: "Impact Noise", db_level: 70 });
+    .send({ table_id: table.id, category: "Mobile Phone Noise", db_level: 70 });
   assert.equal(created.status, 201);
   assert.equal(created.body.incident.occupant.id, clientB.id);
 

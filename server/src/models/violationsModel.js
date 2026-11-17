@@ -19,15 +19,44 @@ export async function forOccupant(occupantId) {
 
 /**
  * Strikes = the occupant's violations created after their strikes_since
- * (all of them if it is empty). Done in SQL so the timestamps keep their
- * full precision.
+ * (all of them if it is empty) and inside the last `windowDays` days. Done
+ * in SQL so the timestamps keep their full precision.
  */
-export async function countStrikes(occupantId, client) {
+export async function countStrikes(occupantId, windowDays, client) {
   const { rows } = await runnerFor(client).query(
     `SELECT COUNT(*)::int AS count
      FROM violations v JOIN occupants o ON o.id = v.occupant_id
-     WHERE v.occupant_id = $1 AND (o.strikes_since IS NULL OR v.created_at > o.strikes_since)`,
-    [occupantId]
+     WHERE v.occupant_id = $1 AND (o.strikes_since IS NULL OR v.created_at > o.strikes_since)
+       AND v.created_at > clock_timestamp() - make_interval(days => $2)`,
+    [occupantId, windowDays]
+  );
+  return rows[0].count;
+}
+
+/** Violations for an occupant in the last `hours` hours (daily strike cap). */
+export async function countRecent(occupantId, hours, client) {
+  const { rows } = await runnerFor(client).query(
+    `SELECT COUNT(*)::int AS count FROM violations
+     WHERE occupant_id = $1 AND created_at > clock_timestamp() - make_interval(hours => $2)`,
+    [occupantId, hours]
+  );
+  return rows[0].count;
+}
+
+/**
+ * Recount for the occupant's current ban: violations that were strikes when
+ * the ban started (after ban_strikes_since, up to ban_started_at, and no
+ * older than `windowDays` before the ban started).
+ */
+export async function countForCurrentBan(occupantId, windowDays, client) {
+  const { rows } = await runnerFor(client).query(
+    `SELECT COUNT(*)::int AS count
+     FROM violations v JOIN occupants o ON o.id = v.occupant_id
+     WHERE v.occupant_id = $1 AND o.ban_started_at IS NOT NULL
+       AND (o.ban_strikes_since IS NULL OR v.created_at > o.ban_strikes_since)
+       AND v.created_at <= o.ban_started_at
+       AND v.created_at > o.ban_started_at - make_interval(days => $2)`,
+    [occupantId, windowDays]
   );
   return rows[0].count;
 }
@@ -67,9 +96,10 @@ export async function create({ occupant_id, incident_id, table_id, violation_num
   return rows[0];
 }
 
+/** Deletes the incident's violation. Returns the deleted row, or null. */
 export async function removeForIncident(incidentId, client) {
-  const { rowCount } = await runnerFor(client).query("DELETE FROM violations WHERE incident_id = $1", [incidentId]);
-  return rowCount > 0;
+  const { rows } = await runnerFor(client).query("DELETE FROM violations WHERE incident_id = $1 RETURNING *", [incidentId]);
+  return rows[0] || null;
 }
 
 export async function findAll({ from, to, table_id } = {}) {

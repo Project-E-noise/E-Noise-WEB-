@@ -7,7 +7,7 @@ export const EFFECTIVE_STATUS = "CASE WHEN status = 'BANNED' AND ban_until <= NO
 // account_ready: the occupant verified their email and set a password, so
 // they finished signing up themselves (required before being seated).
 const COLUMNS = `id, full_name, email, contact, ${EFFECTIVE_STATUS} AS status, ban_started_at, ban_until,
-  strikes_since, (email_verified AND password_hash IS NOT NULL) AS account_ready, consented_at, created_at, updated_at`;
+  strikes_since, ban_strikes_since, (email_verified AND password_hash IS NOT NULL) AS account_ready, consented_at, created_at, updated_at`;
 
 function runnerFor(client) {
   return client || { query };
@@ -61,14 +61,15 @@ export async function remove(id) {
 
 /**
  * Starts a ban of `days` days and resets strikes: only violations created
- * after this moment count as new strikes. Uses the database clock
- * (clock_timestamp, like violations.created_at) so the two line up exactly.
+ * after this moment count as new strikes. The old strikes_since is kept in
+ * ban_strikes_since so the ban can be recounted later. Uses the database
+ * clock (clock_timestamp, like violations.created_at) so the two line up.
  */
 export async function ban(id, days, client) {
   const { rows } = await runnerFor(client).query(
     `UPDATE occupants
      SET status = 'BANNED', ban_started_at = clock_timestamp(), ban_until = clock_timestamp() + make_interval(days => $2),
-         strikes_since = clock_timestamp(), updated_at = NOW()
+         ban_strikes_since = strikes_since, strikes_since = clock_timestamp(), updated_at = NOW()
      WHERE id = $1 RETURNING ${COLUMNS}`,
     [id, days]
   );
@@ -80,6 +81,23 @@ export async function liftBan(id) {
   const { rows } = await query(
     `UPDATE occupants
      SET status = 'ACTIVE', ban_until = GREATEST(NOW(), ban_started_at + INTERVAL '1 second'), updated_at = NOW()
+     WHERE id = $1 AND status = 'BANNED'
+     RETURNING ${COLUMNS}`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * A strike behind the current ban was removed and the recount is below the
+ * threshold: end the ban now and give back the strikes that are left
+ * (strikes_since goes back to where it was before the ban).
+ */
+export async function liftBanAfterRecount(id, client) {
+  const { rows } = await runnerFor(client).query(
+    `UPDATE occupants
+     SET status = 'ACTIVE', ban_until = GREATEST(clock_timestamp(), ban_started_at + INTERVAL '1 second'),
+         strikes_since = ban_strikes_since, ban_strikes_since = NULL, updated_at = NOW()
      WHERE id = $1 AND status = 'BANNED'
      RETURNING ${COLUMNS}`,
     [id]
