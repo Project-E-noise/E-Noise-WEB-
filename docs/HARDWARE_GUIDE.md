@@ -251,7 +251,7 @@ Pass: exactly the expected color row lights and the critical LED blinks. Fail: u
 
 ## Raw-mic diagnostic sketch
 
-Upload this standalone sketch for test (c) and calibration. Open Serial Monitor at 115200 baud. It reads GPIO34 in 50 ms windows and prints the minimum, maximum, and peak-to-peak ADC counts; reports are paced to about 250 ms apart.
+Upload this standalone sketch for test (c) (wiring check only; calibration uses the normal firmware's `[level]` lines, see Calibration). Open Serial Monitor at 115200 baud. It reads GPIO34 in 50 ms windows and prints the minimum, maximum, and peak-to-peak ADC counts; reports are paced to about 250 ms apart.
 
 ```cpp
 const int MIC_PIN = 34;
@@ -333,16 +333,16 @@ For dashboard-only simulation, use the exact script commands from `server/`: `np
 
 ## Calibration
 
-The firmware's dB estimate is a rough peak-to-peak proxy, not a calibrated sound meter. Use a phone SPL app as a rough reference or, preferably, an SPL meter. Use the raw-mic diagnostic sketch above during calibration and keep the mic and reference device side by side in a quiet, stable setup.
+The firmware measures the RMS of the microphone signal over each whole second (AC part only, the DC bias is subtracted) in millivolts, using `analogReadMilliVolts()` on GPIO34 (ADC1). It turns that into dB with a **multi-point table** `CAL_TABLE` in `enoise_node.ino` (rows of `{ mV RMS, dB }`, interpolated in `20*log10(mV)`). The rows shipped in the firmware are **PLACEHOLDERS, not measurements**; until you replace them the dashboard labels readings "dB (est.)". Use a phone SPL app as a rough reference or, preferably, an SPL meter, side by side with the mic in a quiet, stable setup.
 
-1. Set the phone app or SPL meter to the weighting and response mode you will use consistently. Play a steady tone at a safe, stable volume near the mic.
-2. In Serial Monitor, read several `min=... max=... pp=...` lines. Record the representative `pp` count while the sound is steady; do not use a single transient maximum.
-3. Convert the recorded p-p counts to volts: `p-p volts = pp counts × 3.3 / 4095`. For example, if the observed count is `P`, enter the computed numeric voltage `P * 3.3 / 4095` as `MIC_REF_VOLTAGE` in the firmware (in volts, for example `0.023f`; replace that example with your calculated value).
-4. At the same time and sound position, read the reference meter's displayed dB(A) value. Enter that numeric value as `MIC_REF_DB` (for example, if it reads 54.2 dB(A), set `MIC_REF_DB = 54.2f`).
-5. Reflash with those two values, repeat the same sound/reference measurement, and compare the firmware telemetry with the reference at that point. Adjust the reference pair if needed, then check additional sound levels; one-point matching does not guarantee accuracy across a range.
+1. Set the phone app or SPL meter to the weighting and response mode you will use consistently (dB(A), slow).
+2. Flash the normal firmware. With `PRINT_RMS_MV` left `true`, the Serial Monitor (115200 baud) prints `[level] rms=12.3 mV -> 51.2 dB (3950 samples)` once per second. Check that the sample count is well above `LEVEL_MIN_SAMPLES` (2000); if it is not, the loop is too busy and the reading is skipped.
+3. Produce a steady sound (a tone or white noise from a speaker) at a quiet level. Wait a few seconds for the readings to settle, note the typical `rms=... mV` value and the meter's dB(A) at the same moment. That is one row.
+4. Repeat at four to six levels spread over the range you care about (quiet room, normal talk, loud talk, shouting / music). Keep the sound steady at each level; do not use transients.
+5. Enter the rows in `CAL_TABLE` sorted by mV (at least two rows), re-flash, and check a few levels against the meter again. Then set `DB_CALIBRATED` to `true` in `capstone/src/constants.js` and `db_calibrated` in `server/src/controllers/systemController.js`.
 6. Repeat calibration after changing mic gain, module, enclosure, placement, or firmware, and before relying on study results.
 
-The MAX9814 has automatic gain control, while firmware uses a 50 ms peak-to-peak window, so this is not calibrated SPL and may not track transient or sustained sound like a certified meter. Phone app accuracy and your module's response are **unverified: confirm on the bench**.
+The MAX9814 has automatic gain control, so the mV-to-dB relation is not fixed across levels (that is why the table has several points), and there is no A-weighting filter. Phone app accuracy and your module's response are **unverified: confirm on the bench**.
 
 ## Mounting and placement
 

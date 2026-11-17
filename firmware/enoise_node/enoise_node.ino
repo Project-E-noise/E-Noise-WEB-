@@ -2,12 +2,14 @@
  * Project E-Noise - ESP32 sensor node firmware
  * ---------------------------------------------
  * One node per table. Each node:
- *   1. Samples the MAX9814 microphone and estimates a sound level in dB.
- *   2. Publishes that reading over MQTT (TLS) once per second.
+ *   1. Samples the MAX9814 microphone continuously from loop() (no blocking
+ *      sampling window) and once per second publishes the RMS level of the
+ *      last second as an estimated dB value.
+ *   2. Publishes that reading over MQTT (TLS, broker certificate checked).
  *   3. Drives the 11 LEDs (5 green / 3 yellow / 2 red / 1 critical) exactly
  *      as the backend tells it on the LED topic. The node never decides the
- *      LED state itself: the 10-second critical confirmation runs on the
- *      server (server/src/services/telemetryService.js).
+ *      LED state itself: the confirmation engine runs on the server
+ *      (server/src/services/telemetryService.js).
  *   4. Publishes a retained {"online":true} status and sets {"online":false}
  *      as its MQTT Last Will, so the dashboard sees power/Wi-Fi loss.
  *   5. When the backend asks (only while the table is already loud), records
@@ -15,13 +17,16 @@
  *      classification. The clip only lives in RAM and is freed right after.
  *
  * Setup:
- *   - Copy secrets.example.h to secrets.h and fill in Wi-Fi + HiveMQ details.
+ *   - Copy secrets.example.h to secrets.h and fill in Wi-Fi, broker details
+ *     and the broker's root CA certificate (MQTT_CA_CERT).
  *   - Board: "ESP32 Dev Module" (ESP32-WROOM-32 / DevKitV1).
  *   - Libraries: PubSubClient (Nick O'Leary) 2.8, ArduinoJson (Benoit Blanchon) 7.x.
  *   - Compile: arduino-cli compile --fqbn esp32:esp32:esp32 firmware/enoise_node
  *
  * Wiring:
- *   MAX9814 OUT -> GPIO34 (ADC1, input-only, works while Wi-Fi is on)
+ *   MAX9814 OUT -> GPIO34 (ADC1 channel 6, input-only). ADC1 is required:
+ *                  ADC2 pins (GPIO 0, 2, 4, 12-15, 25-27) cannot be read
+ *                  while Wi-Fi is on.
  *   MAX9814 VCC -> 3V3, GND -> GND, GAIN pin floating (60 dB gain)
  *   11 LEDs, each through a 220-330 ohm resistor to GND, anodes to:
  *     Green:    GPIO 4, 5, 18, 19, 21
@@ -38,11 +43,16 @@
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <math.h>
 
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
-#error "secrets.h is missing: copy secrets.example.h to secrets.h and fill in your Wi-Fi and HiveMQ details."
+#error "secrets.h is missing: copy secrets.example.h to secrets.h and fill in your Wi-Fi and broker details."
+#endif
+
+#ifndef MQTT_CA_CERT
+#error "MQTT_CA_CERT is missing from secrets.h: paste the broker's root CA certificate (PEM). See secrets.example.h."
 #endif
 
 // ---------------------------------------------------------------------
@@ -63,6 +73,8 @@ const uint32_t AUDIO_NUM_SAMPLES = AUDIO_SAMPLE_RATE_HZ * AUDIO_CLIP_SECONDS;
 // Pins
 // ---------------------------------------------------------------------
 const int MIC_PIN = 34;
+// ADC1 = GPIO 32-39 on the classic ESP32. ADC2 shares hardware with Wi-Fi.
+static_assert(MIC_PIN >= 32 && MIC_PIN <= 39, "MIC_PIN must be an ADC1 pin (GPIO32-39): ADC2 cannot be read while Wi-Fi is on.");
 // GPIO5 is a boot strapping pin; an LED load on it is fine at boot.
 const int GREEN_PINS[5] = {4, 5, 18, 19, 21};
 const int YELLOW_PINS[3] = {22, 23, 32};
@@ -70,22 +82,44 @@ const int RED_PINS[2] = {25, 26};
 const int CRITICAL_PIN = 27;
 
 // ---------------------------------------------------------------------
-// Sound level estimate - NOT CALIBRATED
+// Sound level: RMS over the whole second, AC part only
 // ---------------------------------------------------------------------
-// The value sent as "db_level" is only an estimate: it takes the
-// peak-to-peak microphone voltage over a 50 ms window and converts it to
-// dB using ONE assumed reference point (MIC_REF_VOLTAGE = MIC_REF_DB).
-// These two numbers are guesses and have NOT been measured. Until they are
-// set by comparing against a real sound level meter at a known volume,
-// treat the dB values as relative ("louder/quieter"), not as true dB(A)
-// (there is also no A-weighting filter). Thresholds in the dashboard must
-// be tuned against these uncalibrated values.
-const unsigned long SAMPLE_WINDOW_MS = 50;
-const float ADC_MAX_VOLTAGE = 3.3f;
-const float MIC_REF_VOLTAGE = 0.02f; // UNCALIBRATED: peak-to-peak volts assumed at MIC_REF_DB
-const float MIC_REF_DB = 40.0f;      // UNCALIBRATED: dB assumed at MIC_REF_VOLTAGE
+// loop() takes one ADC sample every LEVEL_SAMPLE_INTERVAL_US (target 4 kHz;
+// the real rate depends on how busy the loop is) and keeps a running sum
+// and sum of squares in millivolts. Once per second the mean (the mic's DC
+// bias) is subtracted and the RMS of what is left is turned into dB with
+// the calibration table below. If the loop was blocked (audio capture,
+// TLS handshake) and fewer than LEVEL_MIN_SAMPLES were taken, that second
+// is skipped instead of publishing a value made from a few samples.
+const uint32_t LEVEL_SAMPLE_INTERVAL_US = 250;   // 4 kHz target (> 2 kHz to limit aliasing)
+const uint32_t LEVEL_MIN_SAMPLES = 2000;         // at least 2 kHz average over the second
+
+// ---- Calibration table: PLACEHOLDER VALUES, NOT MEASURED ----------------
+// Each row maps the AC RMS microphone voltage (millivolts) to the sound
+// level (dB(A)) read on a reference meter at the same moment. Fill these
+// from bench tests (docs/HARDWARE_GUIDE.md "Calibration"): play steady
+// sounds at several levels, note the mV RMS printed on Serial and the
+// meter reading, and replace the rows (keep them sorted by mV, at least
+// two rows). Between rows the firmware interpolates linearly in
+// 20*log10(mV); outside the table it extrapolates from the nearest
+// segment and clamps to DB_FLOOR..DB_CEIL. Until this is done, readings
+// are estimates ("dB (est.)" on the dashboard) and thresholds must be
+// tuned against them.
+struct CalPoint {
+  float mv_rms; // PLACEHOLDER
+  float db;     // PLACEHOLDER
+};
+const CalPoint CAL_TABLE[] = {
+  {   2.0f, 35.0f }, // PLACEHOLDER: quiet room
+  {  10.0f, 50.0f }, // PLACEHOLDER: normal conversation at the table
+  {  50.0f, 65.0f }, // PLACEHOLDER: loud conversation
+  { 250.0f, 80.0f }  // PLACEHOLDER: shouting / loud music
+};
+const int CAL_POINTS = sizeof(CAL_TABLE) / sizeof(CAL_TABLE[0]);
+static_assert(sizeof(CAL_TABLE) / sizeof(CAL_TABLE[0]) >= 2, "CAL_TABLE needs at least two points.");
 const float DB_FLOOR = 30.0f;
 const float DB_CEIL = 100.0f;
+const bool PRINT_RMS_MV = true; // Serial "[level] rms=12.3 mV -> 51.2 dB" every second (used for calibration)
 
 // ---------------------------------------------------------------------
 // State
@@ -109,6 +143,12 @@ unsigned long lastLedCommandAt = 0;
 bool ledFailsafeActive = false;
 bool audioCaptureRequested = false;
 
+// Running level accumulators for the current one-second window.
+uint32_t levelSampleCount = 0;
+double levelSum = 0;    // sum of mV
+double levelSumSq = 0;  // sum of mV^2
+unsigned long lastLevelSampleUs = 0;
+
 void setup() {
   Serial.begin(115200);
 
@@ -120,24 +160,27 @@ void setup() {
 
   setupLedPins();
   analogReadResolution(12);
-  analogSetPinAttenuation(MIC_PIN, ADC_11db);
+  analogSetPinAttenuation(MIC_PIN, ADC_11db); // full 0-3.3 V range (the mic output is biased at ~1.25 V)
   lastLedCommandAt = millis();
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
 
-  // NOTE: setInsecure() skips checking the broker's TLS certificate. The
-  // connection is still encrypted, but for a real deployment load the
-  // broker's CA certificate with tlsClient.setCACert(...) instead.
-  tlsClient.setInsecure();
+  // Check the broker's certificate against its root CA (secrets.h). The
+  // ESP32 needs the clock for this; SNTP is started once Wi-Fi is up.
+  tlsClient.setCACert(MQTT_CA_CERT);
   tlsClient.setTimeout(10); // seconds; a stuck TLS handshake can't block for long
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(onMqttMessage);
   mqtt.setKeepAlive(30);
   mqtt.setSocketTimeout(10);
+
+  resetLevelWindow();
 }
 
 void loop() {
+  sampleLevel(); // cheap; runs on every pass
+
   maintainWifi();
   maintainMqtt();
   if (mqtt.connected()) mqtt.loop();
@@ -146,6 +189,7 @@ void loop() {
   if (audioCaptureRequested) {
     audioCaptureRequested = false;
     captureAndPublishAudio();
+    resetLevelWindow(); // the capture blocked the loop: start a fresh second
   }
 
   updateCriticalBlink();
@@ -154,8 +198,9 @@ void loop() {
   unsigned long now = millis();
   if (now - lastTelemetryAt >= TELEMETRY_INTERVAL_MS) {
     lastTelemetryAt = now;
-    float db = sampleDbLevel();
-    publishTelemetry(db);
+    float db;
+    if (finishLevelWindow(&db)) publishTelemetry(db);
+    // else: too few samples this second (loop was blocked) -> no reading published
   }
 }
 
@@ -168,10 +213,17 @@ unsigned long nextDelay(unsigned long current) {
 }
 
 void maintainWifi() {
+  static bool clockRequested = false;
   if (WiFi.status() == WL_CONNECTED) {
     wifiRetryDelay = RETRY_MIN_MS;
+    if (!clockRequested) {
+      // Certificate checking needs a roughly correct clock (NTP, non-blocking).
+      configTime(0, 0, "pool.ntp.org", "time.google.com");
+      clockRequested = true;
+    }
     return;
   }
+  clockRequested = false;
   unsigned long now = millis();
   if ((long)(now - wifiNextAttemptAt) < 0) return; // still waiting before the next try
 
@@ -183,10 +235,15 @@ void maintainWifi() {
   wifiRetryDelay = nextDelay(wifiRetryDelay);
 }
 
+bool clockIsSet() {
+  return time(nullptr) > 1700000000; // after 2023-11: NTP has answered
+}
+
 void maintainMqtt() {
   if (WiFi.status() != WL_CONNECTED || mqtt.connected()) return;
   unsigned long now = millis();
   if ((long)(now - mqttNextAttemptAt) < 0) return;
+  if (!clockIsSet()) return; // TLS certificate dates can't be checked yet
 
   char clientId[48];
   snprintf(clientId, sizeof(clientId), "enoise-%s-%04lx", NODE_ID, (unsigned long)(esp_random() & 0xffff));
@@ -208,31 +265,76 @@ void maintainMqtt() {
     mqttNextAttemptAt = now + mqttRetryDelay;
     mqttRetryDelay = nextDelay(mqttRetryDelay);
   }
+  resetLevelWindow(); // the TLS handshake blocked the loop
 }
 
 // ---------------------------------------------------------------------
-// Telemetry: { "db_level": 52.3 }
-// No timestamp (no clock on the board): the backend uses the arrival time.
-// No classification: YAMNet runs on the server.
+// Sound level
 // ---------------------------------------------------------------------
-float sampleDbLevel() {
-  unsigned long start = millis();
-  int minVal = 4095, maxVal = 0;
-  while (millis() - start < SAMPLE_WINDOW_MS) {
-    int v = analogRead(MIC_PIN);
-    if (v < minVal) minVal = v;
-    if (v > maxVal) maxVal = v;
+void resetLevelWindow() {
+  levelSampleCount = 0;
+  levelSum = 0;
+  levelSumSq = 0;
+  lastLevelSampleUs = micros();
+}
+
+// One ADC sample if it is time for the next one. Never waits.
+void sampleLevel() {
+  unsigned long nowUs = micros();
+  if ((long)(nowUs - lastLevelSampleUs) < (long)LEVEL_SAMPLE_INTERVAL_US) return;
+  lastLevelSampleUs = nowUs;
+  // analogReadMilliVolts applies the chip's factory ADC calibration, so
+  // the value is in real millivolts rather than raw counts.
+  uint32_t mv = analogReadMilliVolts(MIC_PIN);
+  levelSum += mv;
+  levelSumSq += (double)mv * (double)mv;
+  levelSampleCount++;
+}
+
+// Closes the one-second window. Returns false (no reading) when too few
+// samples were collected. Otherwise *dbOut is the estimated level.
+bool finishLevelWindow(float* dbOut) {
+  uint32_t n = levelSampleCount;
+  double sum = levelSum, sumSq = levelSumSq;
+  resetLevelWindow();
+
+  if (n < LEVEL_MIN_SAMPLES) {
+    Serial.printf("[level] Only %lu samples this second (need %lu): reading skipped.\n", (unsigned long)n, (unsigned long)LEVEL_MIN_SAMPLES);
+    return false;
   }
 
-  float peakToPeakVoltage = ((maxVal - minVal) / 4095.0f) * ADC_MAX_VOLTAGE;
-  if (peakToPeakVoltage < 0.001f) peakToPeakVoltage = 0.001f; // avoid log(0)
+  // RMS of the AC part: sqrt(mean of squares - square of mean).
+  double mean = sum / n;
+  double variance = sumSq / n - mean * mean;
+  if (variance < 0) variance = 0;
+  float rmsMv = (float)sqrt(variance);
 
-  float db = MIC_REF_DB + 20.0f * log10f(peakToPeakVoltage / MIC_REF_VOLTAGE);
+  *dbOut = rmsToDb(rmsMv);
+  if (PRINT_RMS_MV) Serial.printf("[level] rms=%.2f mV -> %.1f dB (%lu samples)\n", rmsMv, *dbOut, (unsigned long)n);
+  return true;
+}
+
+// Multi-point calibration: linear in 20*log10(mV) between table rows.
+float rmsToDb(float rmsMv) {
+  if (rmsMv < 0.01f) rmsMv = 0.01f; // avoid log(0)
+  float x = 20.0f * log10f(rmsMv);
+
+  int i = 0;
+  while (i < CAL_POINTS - 2 && rmsMv > CAL_TABLE[i + 1].mv_rms) i++;
+  float x0 = 20.0f * log10f(CAL_TABLE[i].mv_rms), y0 = CAL_TABLE[i].db;
+  float x1 = 20.0f * log10f(CAL_TABLE[i + 1].mv_rms), y1 = CAL_TABLE[i + 1].db;
+  float db = (x1 == x0) ? y0 : y0 + (x - x0) * (y1 - y0) / (x1 - x0);
+
   if (db < DB_FLOOR) db = DB_FLOOR;
   if (db > DB_CEIL) db = DB_CEIL;
   return db;
 }
 
+// ---------------------------------------------------------------------
+// Telemetry: { "db_level": 52.3 }
+// No timestamp (no clock needed by the backend): it uses the arrival time.
+// No classification: YAMNet runs on the server.
+// ---------------------------------------------------------------------
 void publishTelemetry(float dbLevel) {
   if (!mqtt.connected()) return; // readings while offline are skipped, not queued
 
@@ -310,7 +412,8 @@ void updateLedFailsafe() {
 
 // ---------------------------------------------------------------------
 // Audio clip for YAMNet: 1 s of 16 kHz 16-bit mono PCM in a WAV header.
-// The buffer (32 KB) is freed on every path; nothing is stored.
+// The buffer (32 KB) is freed on every path; nothing is stored. This is
+// the one place the loop blocks (~1 s); the level window is reset after.
 // ---------------------------------------------------------------------
 void captureAndPublishAudio() {
   if (!mqtt.connected()) return;
@@ -334,6 +437,8 @@ void captureAndPublishAudio() {
       // wait for the next sample time (wrap-safe)
     }
     nextSampleAt += sampleIntervalUs;
+    // Raw counts here (faster than the millivolt conversion); the DC
+    // offset is removed below.
     samples[i] = (int16_t)(analogRead(MIC_PIN) * 8); // 12-bit ADC -> roughly 16-bit range
   }
   // Over ~1,050,000 us means analogRead is too slow for a true 16 kHz clip.
