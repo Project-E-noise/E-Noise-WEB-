@@ -2,8 +2,13 @@
 // server/src/data/constants.js, the SQL CHECK constraints, the firmware and
 // ml-service/category_mapping.py exactly.
 
-// Exactly four ML sound categories — do not add or remove.
-export const ML_CATEGORIES = ["Loud Conversation", "Mobile Phone Noise", "Impact Noise", "Ambient Baseline"];
+// Exactly five ML sound categories (migration 014 added Music).
+export const ML_CATEGORIES = ["Loud Conversation", "Mobile Phone Noise", "Music", "Impact Noise", "Ambient Baseline"];
+
+// Categories that can become a CONFIRMED violation. Mirrors
+// server/src/data/constants.js VIOLATION_CATEGORIES (the server decides;
+// the dashboard only uses this for labels and the category picker).
+export const VIOLATION_CATEGORIES = ["Loud Conversation", "Mobile Phone Noise", "Music"];
 
 // Physical LED configuration: 5 green, 3 yellow, 2 red, 1 critical.
 export const LED_CONFIG = { green: 5, yellow: 3, red: 2, critical: 1 };
@@ -18,7 +23,16 @@ export const READINGS_RETENTION_NOTE = "Raw noise readings are kept for 7 days."
 
 
 export const TABLE_STATUSES = ["AVAILABLE", "OCCUPIED", "OFFLINE", "PAUSED"];
-export const INCIDENT_STATUSES = ["MONITORING", "CONFIRMED", "DISMISSED"];
+export const INCIDENT_STATUSES = ["MONITORING", "CONFIRMED", "DISMISSED", "IGNORED", "UNVERIFIED"];
+
+// Why the server filtered a loud event instead of confirming it.
+export const FILTER_REASON_LABELS = {
+  non_violation_category: "Not a violation sound",
+  low_confidence: "Low classifier confidence",
+  no_classification: "No classification received",
+  table_paused: "Table is paused",
+  neighbor_louder: "Neighbouring table was louder"
+};
 
 export const NAV_SECTIONS = [
   {

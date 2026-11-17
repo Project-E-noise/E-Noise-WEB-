@@ -35,7 +35,7 @@ test("overview, incident breakdown and noise trends", async () => {
   assert.equal(all.body.total_incidents, 3);
 
   const breakdown = await api().get("/api/analytics/incidents?range=7d").set(auth);
-  assert.deepEqual(breakdown.body.category_counts, [1, 0, 1, 0]);
+  assert.deepEqual(breakdown.body.category_counts, [1, 0, 0, 1, 0], "one slot per ML category, Music third");
   assert.equal(breakdown.body.day_counts.reduce((a, b) => a + b, 0), 2);
 
   const trends = await api().get("/api/analytics/noise-trends?range=today").set(auth);
