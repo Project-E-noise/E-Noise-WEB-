@@ -8,7 +8,43 @@ import { TABLE_STATUSES } from "../data/constants.js";
 import { badRequest, conflict, notFound } from "../utils/errors.js";
 import * as check from "../utils/validate.js";
 import { computeLedCounts, computeStatus } from "../utils/ledLogic.js";
+import { categoryDurationSeconds, LABEL_WAIT_SECONDS } from "../utils/violationRules.js";
+import { isMlServiceUp } from "./mlClient.js";
 import { serializeIncident } from "./incidentsService.js";
+
+// 24 h average/peak per table are cached for a minute: they are computed
+// over up to 86,400 rows and were being recomputed on every reading.
+export const STATS_CACHE_MS = 60000;
+const statsCache = new Map(); // table id -> { at, stats }
+
+export function clearStatsCache() {
+  statsCache.clear();
+}
+
+async function cachedStats(tableId) {
+  const hit = statsCache.get(tableId);
+  if (hit && Date.now() - hit.at < STATS_CACHE_MS) return hit.stats;
+  const stats = await noiseReadingsModel.statsForTable(tableId);
+  statsCache.set(tableId, { at: Date.now(), stats });
+  return stats;
+}
+
+// The live streak, for the dashboard's progress bar.
+function monitoringBlock(table, s) {
+  if (!s?.monitoring_since) return null;
+  const labels = Array.isArray(s.streak_labels) ? s.streak_labels : [];
+  return {
+    since: s.monitoring_since,
+    last_loud_at: s.last_loud_at,
+    required_seconds: categoryDurationSeconds(table, labels),
+    label_count: labels.length,
+    // True while the engine holds a sustained streak open for a first label.
+    waiting_for_label: !s.active_incident_id && !labels.length && isMlServiceUp() && table.status !== "PAUSED",
+    label_wait_seconds: LABEL_WAIT_SECONDS,
+    decided: Boolean(s.active_incident_id),
+    peak_db: s.peak_db != null ? Number(s.peak_db) : null
+  };
+}
 
 // Node ids become part of MQTT topic names, so only safe characters are allowed.
 const NODE_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
@@ -24,7 +60,7 @@ async function currentOccupant(tableId) {
 export async function serializeTable(table) {
   const [reading, stats, sensorStatus, occupant, lastIncidentAt] = await Promise.all([
     noiseReadingsModel.latestForTable(table.id),
-    noiseReadingsModel.statsForTable(table.id),
+    cachedStats(table.id),
     sensorStatusModel.findByTableId(table.id),
     currentOccupant(table.id),
     incidentsModel.lastForTable(table.id)
@@ -51,8 +87,10 @@ export async function serializeTable(table) {
     status: computeStatus(dbLevel, table),
     // Online = the node said so AND reported recently (sensorStatusModel).
     is_online: sensorStatus?.effective_online ?? false,
-    // A loud streak is being timed but isn't confirmed yet.
-    is_monitoring: Boolean(sensorStatus?.monitoring_since) && !sensorStatus?.led_critical,
+    // A loud streak is being timed but isn't decided yet.
+    is_monitoring: Boolean(sensorStatus?.monitoring_since) && !sensorStatus?.active_incident_id,
+    monitoring: monitoringBlock(table, sensorStatus),
+    cooldown_until: sensorStatus?.cooldown_until && new Date(sensorStatus.cooldown_until) > new Date() ? sensorStatus.cooldown_until : null,
     sensor_status: sensorStatus ? { is_online: sensorStatus.effective_online, last_seen: sensorStatus.last_seen } : null,
     current_db: dbLevel,
     avg_db: stats.avg_db,

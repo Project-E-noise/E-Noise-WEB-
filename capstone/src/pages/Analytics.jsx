@@ -59,7 +59,7 @@ export default function Analytics() {
 
       <div className="two-grid">
         <section className="card">
-          <div className="card-header"><h2 className="card-title">Incidents by day</h2></div>
+          <div className="card-header"><h2 className="card-title">Violations by day</h2></div>
           <AsyncSection
             loading={breakdown.loading}
             error={breakdown.error}
@@ -72,7 +72,7 @@ export default function Analytics() {
           </AsyncSection>
         </section>
         <section className="card">
-          <div className="card-header"><h2 className="card-title">Incidents by category</h2></div>
+          <div className="card-header"><h2 className="card-title">Violations by category</h2></div>
           <AsyncSection
             loading={breakdown.loading}
             error={breakdown.error}

@@ -1,3 +1,8 @@
+import { DB_CALIBRATED } from "../constants";
+
+// Unit label shown next to readings: estimates until the nodes are calibrated.
+export const DB_UNIT = DB_CALIBRATED ? "dB(A)" : "dB (est.)";
+
 export function formatDb(value) {
   const n = Number(value);
   return value != null && Number.isFinite(n) ? n.toFixed(1) : "--";

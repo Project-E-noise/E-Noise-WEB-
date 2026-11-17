@@ -2,31 +2,40 @@ import { useRef, useState } from "react";
 import { Topbar } from "../components/layout/Topbar";
 import { AsyncSection, EmptyState } from "../components/common/UiStates";
 import { useTables } from "../hooks/useTables";
-import { useRealtime } from "../hooks/useRealtime";
+import { useRealtime, mergeTable } from "../hooks/useRealtime";
 import { tablesApi } from "../services/tables";
-import { formatDb, formatPercent, formatTime, tableLabel } from "../utils/formatting";
+import { formatDb, formatPercent, formatTime, tableLabel, DB_UNIT } from "../utils/formatting";
 
 // Live event stream. Every entry is a real reading from the API: a new
-// entry is added only when a table's level actually changes.
+// entry is added only when a table's level actually changes. WebSocket
+// events are merged into the list; nothing is re-fetched per reading.
 export default function RealTimeFeed() {
   const tablesQuery = useTables();
   const [events, setEvents] = useState([]);
   const [paused, setPaused] = useState(false);
   const lastLevels = useRef({});
 
+  const addEvents = list => {
+    const now = new Date();
+    const fresh = list
+      .filter(table => table.current_db != null && lastLevels.current[table.id] !== table.current_db)
+      .map(table => ({ id: `${table.id}-${now.getTime()}`, table, time: now }));
+    for (const t of list) lastLevels.current[t.id] = t.current_db;
+    if (fresh.length) setEvents(prev => [...fresh, ...prev].slice(0, 50));
+  };
+
   const { connected } = useRealtime({
     enabled: !paused,
     interval: 5000,
     fetcher: () => tablesApi.list(),
     onData: data => {
-      const list = data?.tables ?? [];
       tablesQuery.setData(data);
-      const now = new Date();
-      const fresh = list
-        .filter(table => table.current_db != null && lastLevels.current[table.id] !== table.current_db)
-        .map(table => ({ id: `${table.id}-${now.getTime()}`, table, time: now }));
-      lastLevels.current = Object.fromEntries(list.map(t => [t.id, t.current_db]));
-      if (fresh.length) setEvents(prev => [...fresh, ...prev].slice(0, 50));
+      addEvents(data?.tables ?? []);
+    },
+    onEvent: msg => {
+      if (msg.type !== "table:update") return;
+      tablesQuery.setData(prev => mergeTable(prev, msg.table));
+      addEvents([msg.table]);
     }
   });
 
@@ -55,12 +64,15 @@ export default function RealTimeFeed() {
         {data => (
           <div className="status-grid">
             {data.map(t => (
-              <div key={t.id} className="m-card">
+              <div key={t.id} className={`m-card ${t.led_state?.critical ? "is-violation" : ""}`}>
                 <div className="m-head">
                   <div className="m-label">{tableLabel(t)}</div>
-                  <span className={`badge ${t.is_online ? "badge-info" : "badge-neu"}`}>{t.is_online ? `${formatDb(t.current_db)} dB` : "Offline"}</span>
+                  <span className={`badge ${t.is_online ? "badge-info" : "badge-neu"}`}>{t.is_online ? `${formatDb(t.current_db)} ${DB_UNIT}` : "Offline"}</span>
                 </div>
-                <div className="muted-small">{t.classification || "No label yet"}</div>
+                <div className="muted-small">
+                  {t.led_state?.critical && <strong className="alert-text">VIOLATION - </strong>}
+                  {t.classification || "No label yet"}
+                </div>
               </div>
             ))}
           </div>
@@ -78,7 +90,7 @@ export default function RealTimeFeed() {
             <div className="feed-item" key={ev.id}>
               <span className={`feed-dot ${String(ev.table.status).toLowerCase()}`} aria-hidden="true" />
               <div className="feed-content">
-                <div className="feed-title">{tableLabel(ev.table)}: {formatDb(ev.table.current_db)} dB ({ev.table.status})</div>
+                <div className="feed-title">{tableLabel(ev.table)}: {formatDb(ev.table.current_db)} {DB_UNIT} ({ev.table.status}{ev.table.led_state?.critical ? ", VIOLATION" : ""})</div>
                 <div className="feed-desc">
                   {ev.table.classification || "No label"}{ev.table.classification && ev.table.confidence != null ? ` - ${formatPercent(ev.table.confidence)}%` : ""}
                 </div>

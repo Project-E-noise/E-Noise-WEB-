@@ -7,6 +7,7 @@ import thresholdsRoutes from "./thresholdsRoutes.js";
 import analyticsRoutes from "./analyticsRoutes.js";
 import exportRoutes from "./exportRoutes.js";
 import clientRoutes from "./clientRoutes.js";
+import systemRoutes from "./systemRoutes.js";
 
 const router = Router();
 
@@ -18,5 +19,6 @@ router.use("/occupants", occupantsRoutes);
 router.use("/thresholds", thresholdsRoutes);
 router.use("/analytics", analyticsRoutes);
 router.use("/export", exportRoutes);
+router.use("/system", systemRoutes);
 
 export default router;

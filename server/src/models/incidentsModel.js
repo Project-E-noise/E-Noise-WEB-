@@ -101,12 +101,13 @@ export async function remove(id, client) {
   return rowCount > 0;
 }
 
-// ---- Analytics -------------------------------------------------------
+// ---- Analytics (CONFIRMED violations only) ---------------------------
 
 export async function categoryBreakdown({ from, to } = {}) {
   const { rows } = await query(
     `SELECT category, COUNT(*)::int AS count FROM incidents
-     WHERE ($1::timestamptz IS NULL OR occurred_at >= $1)
+     WHERE status = 'CONFIRMED'
+       AND ($1::timestamptz IS NULL OR occurred_at >= $1)
        AND ($2::timestamptz IS NULL OR occurred_at < $2)
      GROUP BY category`,
     [from ?? null, to ?? null]
@@ -119,7 +120,8 @@ export async function dailyBreakdown({ from, to, tz = "UTC" } = {}) {
   const { rows } = await query(
     `SELECT TO_CHAR(occurred_at AT TIME ZONE $3, 'YYYY-MM-DD') AS day, COUNT(*)::int AS count
      FROM incidents
-     WHERE ($1::timestamptz IS NULL OR occurred_at >= $1)
+     WHERE status = 'CONFIRMED'
+       AND ($1::timestamptz IS NULL OR occurred_at >= $1)
        AND ($2::timestamptz IS NULL OR occurred_at < $2)
      GROUP BY day ORDER BY day ASC`,
     [from ?? null, to ?? null, tz]
@@ -131,7 +133,8 @@ export async function mostAffectedTable({ from, to } = {}) {
   const { rows } = await query(
     `SELECT i.table_id, t.table_number, COUNT(*)::int AS count
      FROM incidents i JOIN tables t ON t.id = i.table_id
-     WHERE ($1::timestamptz IS NULL OR i.occurred_at >= $1)
+     WHERE i.status = 'CONFIRMED'
+       AND ($1::timestamptz IS NULL OR i.occurred_at >= $1)
        AND ($2::timestamptz IS NULL OR i.occurred_at < $2)
      GROUP BY i.table_id, t.table_number ORDER BY count DESC, t.table_number ASC LIMIT 1`,
     [from ?? null, to ?? null]
@@ -142,7 +145,8 @@ export async function mostAffectedTable({ from, to } = {}) {
 export async function totalCount({ from, to } = {}) {
   const { rows } = await query(
     `SELECT COUNT(*)::int AS count FROM incidents
-     WHERE ($1::timestamptz IS NULL OR occurred_at >= $1)
+     WHERE status = 'CONFIRMED'
+       AND ($1::timestamptz IS NULL OR occurred_at >= $1)
        AND ($2::timestamptz IS NULL OR occurred_at < $2)`,
     [from ?? null, to ?? null]
   );

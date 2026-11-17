@@ -3,7 +3,7 @@ import * as sensorStatusModel from "../models/sensorStatusModel.js";
 import * as noiseReadingsModel from "../models/noiseReadingsModel.js";
 import { env } from "../config/env.js";
 import { computeLedCounts } from "../utils/ledLogic.js";
-import { decideVerdict, categoryDurationSeconds } from "../utils/violationRules.js";
+import { decideVerdict, categoryDurationSeconds, LABEL_WAIT_SECONDS } from "../utils/violationRules.js";
 import { createIncident } from "./incidentsService.js";
 import { serializeTable } from "./tablesService.js";
 import { broadcastTableUpdate, broadcastIncidentCreated } from "../realtime/wsServer.js";
@@ -19,9 +19,7 @@ export const DIP_TOLERANCE_SECONDS = 2;
 export const MAX_READING_GAP_SECONDS = 5;
 // Ask for a new audio clip at the streak start, then this often.
 export const AUDIO_RECLASSIFY_SECONDS = 5;
-// After the sustained time, wait this long for a first label (only while
-// the ML service is reachable).
-export const LABEL_WAIT_SECONDS = 8;
+// LABEL_WAIT_SECONDS (8 s wait for a first label) lives in violationRules.js.
 
 const secondsBetween = (later, earlier) => (new Date(later).getTime() - new Date(earlier).getTime()) / 1000;
 const iso = date => new Date(date).toISOString();

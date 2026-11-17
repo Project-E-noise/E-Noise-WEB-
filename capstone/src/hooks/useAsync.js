@@ -43,11 +43,19 @@ export function useAsync(fn, deps = []) {
     reload();
   }, [reload]);
 
-  const setData = data => {
-    // A realtime result is newer than any in-flight REST request.
+  // setData(next) or setData(previous => next). A realtime result is newer
+  // than any in-flight REST request, so that request's answer is dropped.
+  // An updater that returns undefined (e.g. nothing loaded yet) keeps the
+  // current state.
+  const setData = useCallback(next => {
     requestId.current += 1;
-    if (mounted.current) setState({ data, loading: false, error: null });
-  };
+    if (!mounted.current) return;
+    setState(s => {
+      const data = typeof next === "function" ? next(s.data) : next;
+      if (data === undefined) return s;
+      return { data, loading: false, error: null };
+    });
+  }, []);
 
   return { ...state, setData, reload };
 }

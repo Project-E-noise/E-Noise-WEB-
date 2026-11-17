@@ -13,6 +13,10 @@ export { VIOLATION_CATEGORIES };
 // PLACEHOLDER: tune with labelled recordings from the study hub.
 export const MIN_CONFIDENCE = env.minConfidence;
 
+// After the sustained time, the engine waits this long (seconds) for a
+// first label, but only while the ML service answers.
+export const LABEL_WAIT_SECONDS = 8;
+
 // Sustained time per category, in seconds, when shorter than the table's
 // confirmation_seconds. Phone rings are short bursts. PLACEHOLDER value.
 export const CATEGORY_CONFIRMATION_SECONDS = { "Mobile Phone Noise": env.phoneConfirmationSeconds };

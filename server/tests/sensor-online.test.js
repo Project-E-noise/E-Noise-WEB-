@@ -1,5 +1,5 @@
 // "Sensors online": a sensor only counts as online if it said so AND
-// reported recently (SENSOR_STALE_SECONDS, default 60), plus the sweep that
+// reported recently (SENSOR_STALE_SECONDS, default 15), plus the sweep that
 // marks silent sensors offline.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -83,7 +83,7 @@ test("the window size is respected", async () => {
   assert.deepEqual(await sensorStatusModel.markStaleOffline(60), [table.id]);
 });
 
-test("SENSOR_STALE_SECONDS: default 60, custom value, bad values rejected", () => {
+test("SENSOR_STALE_SECONDS: default 15, custom value, bad values rejected", () => {
   const read = value => {
     const childEnv = { ...process.env, NODE_ENV: "test" };
     if (value === undefined) delete childEnv.SENSOR_STALE_SECONDS;
@@ -96,7 +96,7 @@ test("SENSOR_STALE_SECONDS: default 60, custom value, bad values rejected", () =
       stdio: ["ignore", "pipe", "pipe"]
     }).trim();
   };
-  assert.equal(read(undefined), "60");
+  assert.equal(read(undefined), "15");
   assert.equal(read("90"), "90");
   for (const bad of ["0", "-5", "1.5", "abc"]) assert.throws(() => read(bad), undefined, `${bad} must be rejected`);
 });

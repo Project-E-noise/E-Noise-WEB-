@@ -6,20 +6,24 @@ import { IncidentModal } from "../components/incidents/IncidentModal";
 import { AsyncSection } from "../components/common/UiStates";
 import { useTables } from "../hooks/useTables";
 import { useIncidents } from "../hooks/useIncidents";
-import { useRealtime } from "../hooks/useRealtime";
+import { useRealtime, mergeTable, prependIncident } from "../hooks/useRealtime";
+import { useSystemStatus, MlServiceBadge } from "../hooks/useSystemStatus";
 import { incidentsApi } from "../services/incidents";
 import { tablesApi } from "../services/tables";
 import { exportsApi } from "../services/exports";
-import { formatDb, formatTime } from "../utils/formatting";
+import { formatDb, formatTime, DB_UNIT } from "../utils/formatting";
 import { rangeParams } from "../utils/dates";
 import { useToast } from "../context/ToastContext";
+import { FILTERED_STATUSES } from "../constants";
 
-// Live view of every table. Updates arrive over the WebSocket (with
-// polling as a fallback), the same way as the Real-Time Feed page.
+// Live view of every table. Each WebSocket event is merged into the page
+// state (no re-fetch per reading); everything is re-fetched once a minute
+// and whenever the socket (re)connects.
 export default function LiveOverview() {
   const [todayRange] = useState(() => rangeParams("today"));
   const tablesQuery = useTables();
   const incidentsQuery = useIncidents(todayRange);
+  const systemStatus = useSystemStatus();
   const [modalOpen, setModalOpen] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [exporting, setExporting] = useState(false);
@@ -34,15 +38,24 @@ export default function LiveOverview() {
       tablesQuery.setData(tableData);
       incidentsQuery.setData(incidentData);
       setLastUpdated(new Date());
+    },
+    onEvent: msg => {
+      if (msg.type === "table:update") tablesQuery.setData(prev => mergeTable(prev, msg.table));
+      else if (msg.type === "incident:created" && new Date(msg.incident.occurred_at) >= new Date(todayRange.from)) {
+        incidentsQuery.setData(prev => prependIncident(prev, msg.incident));
+      }
+      setLastUpdated(new Date());
     }
   });
 
   const tables = tablesQuery.data?.tables ?? [];
   const incidents = incidentsQuery.data?.incidents ?? [];
-  const withReading = tables.filter(t => t.current_db != null);
+  const violationsToday = incidents.filter(i => i.status === "CONFIRMED").length;
+  const filteredToday = incidents.filter(i => FILTERED_STATUSES.includes(i.status)).length;
+  const withReading = tables.filter(t => t.current_db != null && t.is_online);
   const avgDb = withReading.length ? withReading.reduce((sum, t) => sum + Number(t.current_db), 0) / withReading.length : null;
   const online = tables.filter(t => t.is_online).length;
-  const critical = tables.filter(t => t.status === "CRITICAL").length;
+  const critical = tables.filter(t => t.led_state?.critical).length;
 
   const logIncident = async payload => {
     await incidentsApi.create(payload);
@@ -71,6 +84,7 @@ export default function LiveOverview() {
   return (
     <div className="page">
       <Topbar title="Live Overview" subtitle={`Last updated ${formatTime(lastUpdated)}`}>
+        <MlServiceBadge status={systemStatus} />
         <span className={`badge ${connected ? "badge-safe" : "badge-neu"}`} title={connected ? "Receiving live updates" : "Live connection down, refreshing every few seconds"}>
           <i className={`ti ${connected ? "ti-plug-connected" : "ti-refresh"}`} /> {connected ? "Live" : "Polling"}
         </span>
@@ -85,11 +99,12 @@ export default function LiveOverview() {
         </button>
       </Topbar>
 
-      <div className="metrics-grid">
-        <MetricCard label="Average noise now" value={avgDb != null ? formatDb(avgDb) : "--"} unit="dB" icon="ti-chart-bar" iconClass="ico-g" />
+      <div className="metrics-grid metrics-grid-5">
+        <MetricCard label="Average noise now" value={avgDb != null ? formatDb(avgDb) : "--"} unit={DB_UNIT} icon="ti-chart-bar" iconClass="ico-g" />
         <MetricCard label="Sensors online" value={tables.length ? `${online}/${tables.length}` : "--"} icon="ti-access-point" iconClass="ico-b" />
-        <MetricCard label="Incidents today" value={incidentsQuery.error ? "--" : incidents.length} icon="ti-alert-triangle" iconClass="ico-a" />
-        <MetricCard label="Tables at critical" value={critical} icon="ti-bulb" iconClass="ico-r" />
+        <MetricCard label="Violations today" value={incidentsQuery.error ? "--" : violationsToday} icon="ti-alert-triangle" iconClass="ico-r" note="Confirmed only" />
+        <MetricCard label="Filtered today" value={incidentsQuery.error ? "--" : filteredToday} icon="ti-filter" iconClass="ico-a" note="Loud, but not a violation" />
+        <MetricCard label="Tables in violation" value={critical} icon="ti-bulb" iconClass="ico-r" />
       </div>
 
       <AsyncSection

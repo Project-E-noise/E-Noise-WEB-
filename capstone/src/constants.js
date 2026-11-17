@@ -10,6 +10,20 @@ export const ML_CATEGORIES = ["Loud Conversation", "Mobile Phone Noise", "Music"
 // the dashboard only uses this for labels and the category picker).
 export const VIOLATION_CATEGORIES = ["Loud Conversation", "Mobile Phone Noise", "Music"];
 
+// Statuses shown under the "Filtered" tab of Incident Logs: loud events the
+// server decided were not violations (or could not verify).
+export const FILTERED_STATUSES = ["IGNORED", "UNVERIFIED"];
+
+// dB readings are estimates from an uncalibrated microphone until the
+// nodes are calibrated on the bench (docs/HARDWARE_GUIDE.md). Flip this
+// (and the server's db_calibrated) once they are.
+export const DB_CALIBRATED = false;
+
+// A table that reported within this many seconds is "live"; after that the
+// LEDs dim and the card says "No data for Xs" (the server marks it offline
+// after SENSOR_STALE_SECONDS, default 15).
+export const STALE_AFTER_SECONDS = 5;
+
 // Physical LED configuration: 5 green, 3 yellow, 2 red, 1 critical.
 export const LED_CONFIG = { green: 5, yellow: 3, red: 2, critical: 1 };
 
