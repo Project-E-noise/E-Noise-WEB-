@@ -43,20 +43,26 @@ export async function lastForTable(tableId) {
 }
 
 export async function create(
-  { table_id, occupant_id, category, db_level, confidence, duration_seconds, bulb_triggered, status, notes, occurred_at },
+  { table_id, occupant_id, category, db_level, confidence, duration_seconds, bulb_triggered, status, notes, occurred_at, filter_reason, top_class, peak_db },
   client
 ) {
   const { rows } = await runnerFor(client).query(
-    `INSERT INTO incidents (table_id, occupant_id, category, db_level, confidence, duration_seconds, bulb_triggered, status, notes, occurred_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO incidents (table_id, occupant_id, category, db_level, confidence, duration_seconds, bulb_triggered, status, notes, occurred_at,
+                            filter_reason, top_class, peak_db)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      RETURNING *`,
-    [table_id, occupant_id, category, db_level, confidence, duration_seconds, bulb_triggered, status, notes, occurred_at]
+    [table_id, occupant_id, category ?? null, db_level, confidence, duration_seconds, bulb_triggered, status, notes, occurred_at,
+      filter_reason ?? null, top_class ?? null, peak_db ?? null]
   );
   return rows[0];
 }
 
 // Only the fields that were given are changed (undefined = keep current value).
-export async function update(id, { category, db_level, confidence, duration_seconds, bulb_triggered, status, notes, occurred_at }, client) {
+export async function update(
+  id,
+  { category, db_level, confidence, duration_seconds, bulb_triggered, status, notes, occurred_at, filter_reason, top_class, peak_db },
+  client
+) {
   const { rows } = await runnerFor(client).query(
     `UPDATE incidents
      SET category = COALESCE($2, category),
@@ -66,7 +72,10 @@ export async function update(id, { category, db_level, confidence, duration_seco
          bulb_triggered = COALESCE($8, bulb_triggered),
          status = COALESCE($9, status),
          notes = COALESCE($10, notes),
-         occurred_at = COALESCE($11, occurred_at)
+         occurred_at = COALESCE($11, occurred_at),
+         filter_reason = CASE WHEN $12 THEN $13 ELSE filter_reason END,
+         top_class = CASE WHEN $14 THEN $15 ELSE top_class END,
+         peak_db = CASE WHEN $16 THEN $17::numeric ELSE peak_db END
      WHERE id = $1
      RETURNING *`,
     [
@@ -78,7 +87,10 @@ export async function update(id, { category, db_level, confidence, duration_seco
       bulb_triggered ?? null,
       status ?? null,
       notes ?? null,
-      occurred_at ?? null
+      occurred_at ?? null,
+      filter_reason !== undefined, filter_reason ?? null,
+      top_class !== undefined, top_class ?? null,
+      peak_db !== undefined, peak_db ?? null
     ]
   );
   return rows[0];

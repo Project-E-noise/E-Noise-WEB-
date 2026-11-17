@@ -6,6 +6,7 @@ import { createWsServer } from "./realtime/wsServer.js";
 import { connectMqtt, disconnectMqtt } from "./mqtt/mqttClient.js";
 import { sweepStaleSensors } from "./services/telemetryService.js";
 import { cleanupOldReadings, cleanupPersonalData } from "./services/retentionService.js";
+import { checkMlHealth } from "./services/mlClient.js";
 
 // The WebSocket server shares the same HTTP server and port as the REST
 // API (at /ws), so only one port needs to be open.
@@ -33,6 +34,12 @@ async function runSensorSweep() {
 }
 runSensorSweep();
 const sensorSweepTimer = setInterval(runSensorSweep, SENSOR_SWEEP_MS);
+
+// Every 30 s, ping the ML service. The confirmation engine only waits for a
+// label while it answers, and the dashboard shows an "ML offline" badge.
+const ML_HEALTH_MS = 30000;
+checkMlHealth();
+const mlHealthTimer = setInterval(checkMlHealth, ML_HEALTH_MS);
 
 // Once at startup, then every 24 h: delete violations older than
 // VIOLATION_RETENTION_DAYS, remove the occupant from incidents that old, and
@@ -75,6 +82,7 @@ async function shutdown(signal) {
   console.log(`[server] ${signal} received, shutting down...`);
   setTimeout(() => process.exit(0), 5000).unref();
   clearInterval(sensorSweepTimer);
+  clearInterval(mlHealthTimer);
   clearInterval(violationCleanupTimer);
   clearInterval(readingsCleanupTimer);
   wss.clients.forEach(socket => socket.close(1001, "server restarting"));

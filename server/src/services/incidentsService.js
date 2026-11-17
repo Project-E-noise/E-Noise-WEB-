@@ -3,8 +3,8 @@ import * as tablesModel from "../models/tablesModel.js";
 import * as tableAssignmentsModel from "../models/tableAssignmentsModel.js";
 import * as occupantsModel from "../models/occupantsModel.js";
 import { withTransaction } from "../config/db.js";
-import { ML_CATEGORIES, INCIDENT_STATUSES } from "../data/constants.js";
-import { notFound } from "../utils/errors.js";
+import { ML_CATEGORIES, INCIDENT_STATUSES, FILTER_REASONS } from "../data/constants.js";
+import { badRequest, notFound } from "../utils/errors.js";
 import * as check from "../utils/validate.js";
 import { recordViolationIfApplicable, removeViolationForIncident } from "./violationsService.js";
 
@@ -17,6 +17,9 @@ export function serializeIncident(row) {
     category: row.category,
     db_level: Number(row.db_level),
     confidence: row.confidence != null ? Number(row.confidence) : null,
+    peak_db: row.peak_db != null ? Number(row.peak_db) : null,
+    top_class: row.top_class ?? null,
+    filter_reason: row.filter_reason ?? null,
     duration_seconds: row.duration_seconds,
     bulb_triggered: row.bulb_triggered,
     status: row.status,
@@ -30,10 +33,13 @@ export function serializeIncident(row) {
 
 // Checks every field that may be sent when creating or editing an incident.
 // With partial=true, missing fields are left undefined (= not changed).
+// A category is required only for CONFIRMED incidents (filtered ones may
+// have no label at all).
 function readIncidentFields(body, { partial }) {
   const has = field => body[field] !== undefined;
+  const blank = field => body[field] === null || body[field] === "";
   const fields = {};
-  if (!partial || has("category")) fields.category = check.oneOf(body.category, "Category", ML_CATEGORIES);
+  if (!partial || has("category")) fields.category = !has("category") || blank("category") ? null : check.oneOf(body.category, "Category", ML_CATEGORIES);
   if (!partial || has("db_level")) fields.db_level = check.number(body.db_level, "dB level", { min: 0, max: 200 });
   if (!partial || has("confidence")) fields.confidence = check.optionalNumber(body.confidence, "Confidence", { min: 0, max: 1 });
   if (!partial || has("duration_seconds")) {
@@ -46,6 +52,10 @@ function readIncidentFields(body, { partial }) {
   if (has("notes")) fields.notes = check.optionalText(body.notes, "Notes", { max: 1000 });
   else if (!partial) fields.notes = "";
   if (has("occurred_at")) fields.occurred_at = check.optionalDateTime(body.occurred_at, "Occurred at") ?? undefined;
+  if (has("peak_db")) fields.peak_db = check.optionalNumber(body.peak_db, "Peak dB", { min: 0, max: 200 });
+  if (has("top_class")) fields.top_class = check.optionalText(body.top_class, "Top class", { max: 100, fallback: null });
+  if (has("filter_reason")) fields.filter_reason = blank("filter_reason") ? null : check.oneOf(body.filter_reason, "Filter reason", FILTER_REASONS);
+  if (!partial && fields.status === "CONFIRMED" && !fields.category) throw badRequest("Choose a category for a confirmed incident.");
   return fields;
 }
 
@@ -68,17 +78,20 @@ export async function getIncident(id) {
  * violation and ban if this was their 3rd strike. Used by the REST API and
  * by the telemetry confirmation engine.
  */
-export async function createIncident(body = {}) {
+export async function createIncident(body = {}, { occupantAt } = {}) {
   const tableId = check.id(body.table_id, "Table");
   const fields = readIncidentFields(body, { partial: false });
 
   const table = await tablesModel.findById(tableId);
   if (!table) throw notFound("Table not found.");
 
-  // No occupant given: blame whoever is assigned to the table right now.
+  // No occupant given: blame whoever sat at the table at `occupantAt` (the
+  // confirmation engine passes the streak start), or right now.
   let occupantId = check.optionalId(body.occupant_id, "Occupant");
   if (occupantId) {
     if (!await occupantsModel.findById(occupantId)) throw notFound("Occupant not found.");
+  } else if (occupantAt) {
+    occupantId = (await tableAssignmentsModel.activeAt(tableId, occupantAt))?.occupant_id ?? null;
   } else {
     occupantId = (await tableAssignmentsModel.activeForTable(tableId))?.occupant_id ?? null;
   }

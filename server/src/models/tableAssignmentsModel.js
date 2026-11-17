@@ -12,6 +12,17 @@ export async function activeForTable(tableId, client) {
   return rows[0] || null;
 }
 
+/** Who sat at the table at time `at` (assigned before it, not yet released then). */
+export async function activeAt(tableId, at, client) {
+  const { rows } = await runnerFor(client).query(
+    `SELECT * FROM table_assignments
+     WHERE table_id = $1 AND assigned_at <= $2 AND (released_at IS NULL OR released_at > $2)
+     ORDER BY assigned_at DESC LIMIT 1`,
+    [tableId, at]
+  );
+  return rows[0] || null;
+}
+
 export async function activeForOccupant(occupantId, client) {
   const { rows } = await runnerFor(client).query(
     "SELECT * FROM table_assignments WHERE occupant_id = $1 AND released_at IS NULL",

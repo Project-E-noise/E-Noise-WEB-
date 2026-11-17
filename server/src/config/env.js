@@ -60,6 +60,43 @@ if (!Number.isInteger(noiseReadingsRetentionDays) || noiseReadingsRetentionDays 
   process.exit(1);
 }
 
+// ---- Violation gating (see src/utils/violationRules.js) -----------------
+// Numbers here are PLACEHOLDERS to tune with recordings from the study hub,
+// not measured values.
+function readNumber(name, fallback, { min, max, integer = false }) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
+    // eslint-disable-next-line no-console
+    console.error(`[config] ${name} must be ${integer ? "a whole number" : "a number"} between ${min} and ${max}.`);
+    process.exit(1);
+  }
+  return value;
+}
+
+// A label only counts toward the verdict at or above this confidence (0-1).
+const minConfidence = readNumber("MIN_CONFIDENCE", 0.5, { min: 0, max: 1 });
+// Sustained time for a phone label (seconds). Phone rings are short bursts,
+// so this is lower than the table's confirmation_seconds. Never longer.
+const phoneConfirmationSeconds = readNumber("PHONE_CONFIRMATION_SECONDS", 4, { min: 0, max: 3600, integer: true });
+// Strikes one occupant can get in any rolling 24 hours, so a long noisy
+// session can't produce a 3-strike ban within minutes.
+const maxStrikesPerDay = readNumber("MAX_STRIKES_PER_DAY", 1, { min: 1, max: 100, integer: true });
+// No new streak starts on a table for this long after one was decided.
+const violationCooldownSeconds = readNumber("VIOLATION_COOLDOWN_SECONDS", 120, { min: 0, max: 86400, integer: true });
+
+// ML service. Unset in production = classification off (every loud
+// streak becomes UNVERIFIED). Development defaults to a local service.
+const mlServiceUrlRaw = (process.env.ML_SERVICE_URL || "").trim();
+const mlApiKey = process.env.ML_API_KEY || "";
+if (isProduction && mlServiceUrlRaw && !mlApiKey) {
+  // eslint-disable-next-line no-console
+  console.error("[config] ML_SERVICE_URL is set but ML_API_KEY is empty. Set ML_API_KEY (same value as the ML service) in production.");
+  process.exit(1);
+}
+const mlServiceUrl = (mlServiceUrlRaw || (isProduction ? "" : "http://localhost:8001")).replace(/\/+$/, "") || null;
+
 const corsOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
   .split(",")
   .map(origin => origin.trim())
@@ -101,6 +138,10 @@ export const env = {
   sensorStaleSeconds,
   violationRetentionDays,
   noiseReadingsRetentionDays,
-  mlServiceUrl: (process.env.ML_SERVICE_URL || "http://localhost:8001").replace(/\/+$/, ""),
-  mlApiKey: process.env.ML_API_KEY || ""
+  mlServiceUrl,
+  mlApiKey,
+  minConfidence,
+  phoneConfirmationSeconds,
+  maxStrikesPerDay,
+  violationCooldownSeconds
 };
