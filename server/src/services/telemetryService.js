@@ -25,6 +25,7 @@ export const AUDIO_ACCEPT_WINDOW_SECONDS = 10;
 
 const secondsBetween = (later, earlier) => (new Date(later).getTime() - new Date(earlier).getTime()) / 1000;
 const iso = date => new Date(date).toISOString();
+const warnedUnknownNodeIds = new Set();
 
 /**
  * Handles one telemetry message: store the reading, run the confirmation
@@ -37,7 +38,10 @@ const iso = date => new Date(date).toISOString();
 export async function ingestTelemetry(nodeId, { db_level, classification, confidence, timestamp }, { now: clock } = {}) {
   const table = await tablesModel.findBySensorNodeId(nodeId);
   if (!table) {
-    console.warn(`[telemetry] No table registered for sensor_node_id "${nodeId}". Add it under Table Configuration first.`);
+    if (!warnedUnknownNodeIds.has(nodeId)) {
+      warnedUnknownNodeIds.add(nodeId);
+      console.warn(`[telemetry] No table registered for sensor_node_id "${nodeId}". Add it under Table Configuration first.`);
+    }
     return;
   }
 
