@@ -40,8 +40,9 @@ const PORTS = { api: 15055, broker: 18830, ml: 18001 };
 const API = `http://127.0.0.1:${PORTS.api}`;
 
 // Proposed starting thresholds for Studify (baseline ~60 dB, talking ~80-90 dB,
-// both UNCALIBRATED). See AUDIT_REPORT.md. Table 6 keeps migration 017's defaults
-// on purpose, to show what happens with them.
+// both UNCALIBRATED). Tables 1-5 get them through the API; table 6 keeps what
+// `npm run db:seed:tables` gave it (the DEFAULT_*_THRESHOLD defaults), so S1b
+// checks those defaults.
 const STUDIFY = { warning_threshold: 68, critical_threshold: 75, confirmation_seconds: 10 };
 
 // Test-only speed-up: the default 120 s cooldown would make the run take ages.
@@ -337,11 +338,11 @@ async function sQuietAndSeedThresholds() {
   const inc6 = await incidentsSince(6, since);
   record(
     "S1b",
-    `Same baseline with migration 017's default thresholds (T6: ${tables[6].warning_threshold}/${tables[6].critical_threshold})`,
-    "Green, no events (what the panel would expect)",
+    `Same baseline on a table with the default thresholds from db:seed:tables (T6: ${tables[6].warning_threshold}/${tables[6].critical_threshold})`,
+    "Green, no events",
     `${fmtInc(inc6)}; LEDs max ${n6.stats.maxYellow} yellow / ${n6.stats.maxRed} red; strikes for occupant: ${await violationCount("g")}`,
-    inc6.length === 0 && n6.stats.maxRed === 0,
-    "A 60 dB room is above a 58-60 dB critical threshold, so every quiet minute starts loud streaks."
+    inc6.length === 0 && n6.stats.maxYellow === 0 && n6.stats.maxRed === 0 && tables[6].warning_threshold === 68 && tables[6].critical_threshold === 75,
+    "Before deploy-prep the defaults were 48/58 and 50/60: a 60 dB room then started a loud streak every couple of minutes."
   );
 }
 
@@ -725,6 +726,8 @@ async function main() {
   console.log(`[sim] Re-creating ${SIM_DB} on ${pgHost} and running migrations...`);
   await recreateDatabase();
   console.log((await runNode(path.join(SERVER_DIR, "db/migrate.js"), { DATABASE_URL: `${PG_BASE}/${SIM_DB}` })).trim().split("\n").slice(-1)[0]);
+  // The 7 Studify tables (NODE-001..007, default thresholds, table 7 PAUSED).
+  console.log((await runNode(path.join(SERVER_DIR, "db/seed-tables.js"), { DATABASE_URL: `${PG_BASE}/${SIM_DB}` })).trim().split("\n").slice(-1)[0]);
 
   broker = await startBroker({ port: PORTS.broker, quiet: true });
   ml = await startMockMl({ port: PORTS.ml, key: secrets.mlKey, quiet: true });
