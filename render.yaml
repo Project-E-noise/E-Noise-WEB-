@@ -6,6 +6,10 @@ services:
     name: enoise-api
     runtime: node
     plan: free
+    # Same region as the Neon database (AWS ap-southeast-1). Each sensor
+    # reading needs several database round trips, so the API must sit next
+    # to the database. Render can't move a service to another region later.
+    region: singapore
     rootDir: server
     buildCommand: npm ci --omit=dev
     startCommand: npm start
