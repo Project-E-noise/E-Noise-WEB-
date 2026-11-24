@@ -35,6 +35,7 @@ export const LABELS = {
   traffic: { top_class: "Traffic noise, roadway noise", category: "Ambient Baseline", confidence: 0.74 },
   truck: { top_class: "Truck", category: "Ambient Baseline", confidence: 0.76 },
   horn: { top_class: "Vehicle horn, car horn, honking", category: "Ambient Baseline", confidence: 0.8 },
+  tone: { top_class: "Beep, bleep", category: "Ambient Baseline", confidence: 0.88 },
   quiet: { top_class: "Silence", category: "Ambient Baseline", confidence: 0.6 },
   // The classifier is unsure: below MIN_CONFIDENCE (0.5) -> UNVERIFIED (low_confidence).
   mumble: { top_class: "Speech", category: "Loud Conversation", confidence: 0.31 }

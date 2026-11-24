@@ -75,6 +75,12 @@ export const SCENARIOS = {
   traffic_jam: program("traffic_jam", "Sustained horns/traffic (~79 dB for 15 s): loud, but not a violation sound", 26, [
     { from: 3, to: 18, db: 79, label: "traffic" }
   ]),
+  // Calibration tones (docs/CALIBRATION.md): 1 kHz at ~50, 65 and 80 dB, 30 s each.
+  calibration: program("calibration", "Calibration: 1 kHz tone at 50, 65 and 80 dB, 30 s each", 90, [
+    { from: 0, to: 30, db: 50, label: "tone", jitter: 0.3 },
+    { from: 30, to: 60, db: 65, label: "tone", jitter: 0.3 },
+    { from: 60, to: 90, db: 80, label: "tone", jitter: 0.3 }
+  ]),
   mumble: program("mumble", "Sustained talking the classifier is unsure about (~82 dB, low confidence)", 26, [
     { from: 3, to: 18, db: 82, label: "mumble" }
   ])

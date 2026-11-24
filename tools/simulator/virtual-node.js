@@ -13,6 +13,9 @@
 //   node virtual-node.js --node NODE-002 --scenario quiet --seconds 0   # run until Ctrl+C
 //   node virtual-node.js --list                         # show the scenarios
 // Options: --broker mqtt://127.0.0.1:1883  --username u --password p  --quiet
+//   --offset <dB> --gain <x>  published = gain x measured + offset (default 1 and 0).
+//     A negative offset simulates a microphone that reads low; the values a
+//     calibration produced simulate a corrected node (docs/CALIBRATION.md).
 import { EventEmitter } from "node:events";
 import { pathToFileURL } from "node:url";
 import mqtt from "mqtt";
@@ -23,7 +26,9 @@ import {
   telemetryPayload,
   applyLedCommand,
   ledString,
-  buildWav
+  buildWav,
+  DB_FLOOR,
+  DB_CEIL
 } from "./firmware-model.js";
 import { SCENARIOS, ROTATION, seededRandom } from "./scenarios.js";
 
@@ -45,7 +50,9 @@ export function startVirtualNode({
   seconds,
   loop = false,
   seed,
-  quiet = false
+  quiet = false,
+  offset = 0,
+  gain = 1
 } = {}) {
   const node = new EventEmitter();
   const topics = {
@@ -146,8 +153,10 @@ export function startVirtualNode({
       skipNextReading = Date.now() < blockedUntil ? skipNextReading : false;
       return;
     }
-    const reading = measureOneSecond(sound.db, { random: rnd });
-    if (!reading) return;
+    const measured = measureOneSecond(sound.db, { random: rnd });
+    if (!measured) return;
+    // Same 30-100 dB clamp as the firmware's rmsToDb().
+    const reading = { ...measured, db: Math.min(DB_CEIL, Math.max(DB_FLOOR, gain * measured.db + offset)) };
     client.publish(topics.telemetry, telemetryPayload(reading.db), { qos: 0 });
     node.stats.telemetry++;
     node.stats.readings.push(Number(reading.db.toFixed(1)));
@@ -220,6 +229,8 @@ async function main() {
         scenario,
         seconds: args.seconds !== undefined ? Number(args.seconds) : undefined,
         loop: Boolean(args.loop),
+        offset: args.offset !== undefined ? Number(args.offset) : 0,
+        gain: args.gain !== undefined ? Number(args.gain) : 1,
         quiet: Boolean(args.quiet)
       })
     );
