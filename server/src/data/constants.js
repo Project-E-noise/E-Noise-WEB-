@@ -17,4 +17,3 @@ export const INCIDENT_STATUSES = ["MONITORING", "CONFIRMED", "DISMISSED", "IGNOR
 export const FILTER_REASONS = ["non_violation_category", "low_confidence", "no_classification", "table_paused", "neighbor_louder"];
 export const TABLE_STATUSES = ["AVAILABLE", "OCCUPIED", "OFFLINE", "PAUSED"];
 export const BAN_VIOLATION_THRESHOLD = 3;
-export const DEFAULT_CONFIRMATION_SECONDS = 10;

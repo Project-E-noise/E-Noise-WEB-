@@ -1,8 +1,8 @@
 import { query } from "../config/db.js";
 
 // A ban ends by itself once ban_until has passed. Every read uses this
-// column list, so the status shown is always correct even before the row
-// itself is updated (see liftExpiredBans below).
+// expression as `status`, so an ended ban reads as ACTIVE even though the
+// stored column still says BANNED (nothing reads the stored value directly).
 export const EFFECTIVE_STATUS = "CASE WHEN status = 'BANNED' AND ban_until <= NOW() THEN 'ACTIVE' ELSE status END";
 // account_ready: the occupant verified their email and set a password, so
 // they finished signing up themselves (required before being seated).
@@ -103,13 +103,6 @@ export async function liftBanAfterRecount(id, client) {
     [id]
   );
   return rows[0] || null;
-}
-
-/** Writes ACTIVE to rows whose ban has ended (reads already treat them as ACTIVE). */
-export async function liftExpiredBans(client) {
-  await runnerFor(client).query(
-    "UPDATE occupants SET status = 'ACTIVE', updated_at = NOW() WHERE status = 'BANNED' AND ban_until <= NOW()"
-  );
 }
 
 /** All violations ever (history). */

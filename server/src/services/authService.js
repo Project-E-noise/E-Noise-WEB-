@@ -6,7 +6,7 @@ import * as check from "../utils/validate.js";
 import { hashPassword, checkPassword, VERIFICATION_TOKEN_TTL_MS } from "../utils/passwords.js";
 import { sendVerificationEmail } from "./emailService.js";
 
-export const publicAdmin = adminsModel.publicAdmin;
+const publicAdmin = adminsModel.publicAdmin;
 
 function verifyUrl(token) {
   return `${env.clientUrl}/verify-email?token=${token}`;

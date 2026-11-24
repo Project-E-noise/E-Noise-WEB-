@@ -30,11 +30,6 @@ export async function markStaleOffline(staleSeconds = env.sensorStaleSeconds) {
   return rows.map(row => row.table_id);
 }
 
-export async function findAll() {
-  const { rows } = await query("SELECT * FROM sensor_status");
-  return rows;
-}
-
 export async function createForTable(tableId) {
   const { rows } = await query(
     `INSERT INTO sensor_status (table_id, is_online, last_seen) VALUES ($1, FALSE, NULL) RETURNING *`,

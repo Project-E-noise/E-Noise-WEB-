@@ -8,7 +8,7 @@ ChartJS.register(ArcElement, BarElement, CategoryScale, Filler, LinearScale, Lin
 const AXIS = { color: "#8a8f89", font: { family: "'DM Mono', monospace", size: 11 } };
 const GRID = "rgba(0,0,0,0.05)";
 // Loud Conversation, Mobile Phone Noise, Impact Noise, Ambient Baseline
-export const CATEGORY_COLORS = ["#e24b4a", "#ef9f27", "#378add", "#6a5fd0"];
+const CATEGORY_COLORS = ["#e24b4a", "#ef9f27", "#378add", "#6a5fd0"];
 
 export function NoiseTrendChart({ labels, series, height = "" }) {
   const data = useMemo(
