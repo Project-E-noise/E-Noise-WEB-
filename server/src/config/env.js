@@ -8,9 +8,11 @@ const nodeEnv = process.env.NODE_ENV || "development";
 const isProduction = nodeEnv === "production";
 
 // In production the server refuses to start without these, so a bad
-// deploy fails loudly instead of running with a random JWT secret or no DB.
+// deploy fails loudly instead of running with a random JWT secret, no DB, or
+// localhost defaults (CORS would block the real website, and email links
+// would point to localhost).
 if (isProduction) {
-  const missing = ["JWT_SECRET", "DATABASE_URL"].filter(name => !process.env[name]);
+  const missing = ["JWT_SECRET", "DATABASE_URL", "CORS_ORIGIN", "CLIENT_URL"].filter(name => !(process.env[name] || "").trim());
   if (missing.length) {
     // eslint-disable-next-line no-console
     console.error(`[config] Missing required environment variable(s) in production: ${missing.join(", ")}`);
