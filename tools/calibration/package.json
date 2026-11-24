@@ -1,0 +1,7 @@
+{
+  "name": "enoise-calibration",
+  "private": true,
+  "type": "module",
+  "description": "Computes a sensor node calibration (offset, or gain + offset) from paired reference-meter readings.",
+  "scripts": { "test": "node --test" }
+}
