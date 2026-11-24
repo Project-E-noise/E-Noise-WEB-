@@ -16,6 +16,12 @@ test("GET /health works without a database call", async () => {
   assert.deepEqual(res.body, { status: "ok" });
 });
 
+test("GET /health/db checks the database and shows no details", async () => {
+  const res = await api().get("/health/db");
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { status: "ok" });
+});
+
 test("unknown routes return a JSON 404 { error }", async () => {
   const res = await api().get("/api/nope");
   assert.equal(res.status, 404);

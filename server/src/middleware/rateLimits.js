@@ -33,6 +33,14 @@ export const emailLimiter = limiter({
   message: "Too many email requests. Please try again in an hour."
 });
 
+// /health/db touches the database, so nobody should be able to use it to
+// keep Neon awake or busy.
+export const healthDbLimiter = limiter({
+  windowMinutes: 1,
+  limit: 20,
+  message: "Too many health checks. Please wait a minute."
+});
+
 export const passwordLimiter = limiter({
   windowMinutes: 15,
   limit: 10,
