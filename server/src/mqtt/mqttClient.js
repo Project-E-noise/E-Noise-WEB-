@@ -38,7 +38,6 @@ function runInOrder(nodeId, task) {
  */
 export function connectMqtt() {
   if (!env.hivemq.host) {
-    // eslint-disable-next-line no-console
     console.warn("[mqtt] HIVEMQ_HOST is not set — skipping MQTT connection. Set it in server/.env once hardware is available.");
     return null;
   }
@@ -58,11 +57,9 @@ export function connectMqtt() {
   });
 
   client.on("connect", () => {
-    // eslint-disable-next-line no-console
     console.log(`[mqtt] Connected to ${env.hivemq.host}:${env.hivemq.port}`);
     client.subscribe([TELEMETRY_SUBSCRIBE_FILTER, STATUS_SUBSCRIBE_FILTER, AUDIO_SUBSCRIBE_FILTER], { qos: 1 }, err => {
       if (err) console.error("[mqtt] Subscribe failed:", err.message);
-      // eslint-disable-next-line no-console
       else console.log(`[mqtt] Subscribed: ${TELEMETRY_SUBSCRIBE_FILTER}, ${STATUS_SUBSCRIBE_FILTER}, ${AUDIO_SUBSCRIBE_FILTER}`);
     });
   });

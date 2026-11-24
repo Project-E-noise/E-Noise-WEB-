@@ -24,9 +24,10 @@ export default function TableMonitoring() {
   const tables = tablesQuery.data?.tables ?? [];
 
   // /tables without an id: open the first table.
+  const firstTableId = tables[0]?.id;
   useEffect(() => {
-    if (!id && tables.length) navigate(`/tables/${tables[0].id}`, { replace: true });
-  }, [id, navigate, tables]);
+    if (!id && firstTableId) navigate(`/tables/${firstTableId}`, { replace: true });
+  }, [id, navigate, firstTableId]);
 
   return (
     <div className="page">

@@ -4,7 +4,7 @@
 // tests simulate seconds without sleeping.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { resetDatabase, closeDatabase, createTable, createOccupant, assign, query } from "./helpers.js";
+import { resetDatabase, closeDatabase, createTable, createOccupant, query } from "./helpers.js";
 import { startFakeMl, fakeWav } from "./fake-ml.js";
 import { parseTelemetry, parseStatus, nodeIdFromTopic, isLikelyWav } from "../src/mqtt/topics.js";
 import { ingestTelemetry, ingestStatus, ingestAudioClip } from "../src/services/telemetryService.js";

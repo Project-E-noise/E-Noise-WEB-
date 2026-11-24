@@ -29,7 +29,6 @@ export function errorHandler(err, req, res, _next) {
   }
 
   if (env.nodeEnv !== "test") {
-    // eslint-disable-next-line no-console
     console.error(env.isProduction ? `[error] ${err.message}` : err);
   }
   return res.status(500).json({ error: "Something went wrong on the server. Please try again." });

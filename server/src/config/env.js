@@ -14,12 +14,10 @@ const isProduction = nodeEnv === "production";
 if (isProduction) {
   const missing = ["JWT_SECRET", "DATABASE_URL", "CORS_ORIGIN", "CLIENT_URL"].filter(name => !(process.env[name] || "").trim());
   if (missing.length) {
-    // eslint-disable-next-line no-console
     console.error(`[config] Missing required environment variable(s) in production: ${missing.join(", ")}`);
     process.exit(1);
   }
   if (process.env.JWT_SECRET.length < 32) {
-    // eslint-disable-next-line no-console
     console.error("[config] JWT_SECRET must be at least 32 characters in production.");
     process.exit(1);
   }
@@ -29,7 +27,6 @@ let jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret) {
   jwtSecret = crypto.randomBytes(48).toString("hex");
   if (nodeEnv !== "test") {
-    // eslint-disable-next-line no-console
     console.warn(
       "[config] JWT_SECRET is not set. Using a temporary secret for this run,\n" +
         "         so everyone is signed out on every restart. Set JWT_SECRET in server/.env."
@@ -41,7 +38,6 @@ if (!jwtSecret) {
 // report every second, so 15 s is already a long silence.
 const sensorStaleSeconds = process.env.SENSOR_STALE_SECONDS ? Number(process.env.SENSOR_STALE_SECONDS) : 15;
 if (!Number.isInteger(sensorStaleSeconds) || sensorStaleSeconds <= 0) {
-  // eslint-disable-next-line no-console
   console.error("[config] SENSOR_STALE_SECONDS must be a positive whole number of seconds.");
   process.exit(1);
 }
@@ -50,7 +46,6 @@ if (!Number.isInteger(sensorStaleSeconds) || sensorStaleSeconds <= 0) {
 // strikes only count the recent past.
 const violationRetentionDays = process.env.VIOLATION_RETENTION_DAYS ? Number(process.env.VIOLATION_RETENTION_DAYS) : 30;
 if (!Number.isInteger(violationRetentionDays) || violationRetentionDays <= 0) {
-  // eslint-disable-next-line no-console
   console.error("[config] VIOLATION_RETENTION_DAYS must be a positive whole number of days.");
   process.exit(1);
 }
@@ -59,7 +54,6 @@ if (!Number.isInteger(violationRetentionDays) || violationRetentionDays <= 0) {
 // keep the database small (Neon free plan: 1 GB).
 const noiseReadingsRetentionDays = process.env.NOISE_READINGS_RETENTION_DAYS ? Number(process.env.NOISE_READINGS_RETENTION_DAYS) : 7;
 if (!Number.isInteger(noiseReadingsRetentionDays) || noiseReadingsRetentionDays <= 0) {
-  // eslint-disable-next-line no-console
   console.error("[config] NOISE_READINGS_RETENTION_DAYS must be a positive whole number of days.");
   process.exit(1);
 }
@@ -72,7 +66,6 @@ function readNumber(name, fallback, { min, max, integer = false }) {
   if (raw === undefined || raw === "") return fallback;
   const value = Number(raw);
   if (!Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
-    // eslint-disable-next-line no-console
     console.error(`[config] ${name} must be ${integer ? "a whole number" : "a number"} between ${min} and ${max}.`);
     process.exit(1);
   }
@@ -95,7 +88,6 @@ let thresholdDefaults;
 try {
   thresholdDefaults = readThresholdDefaults();
 } catch (err) {
-  // eslint-disable-next-line no-console
   console.error(`[config] ${err.message}`);
   process.exit(1);
 }
@@ -105,7 +97,6 @@ try {
 const mlServiceUrlRaw = (process.env.ML_SERVICE_URL || "").trim();
 const mlApiKey = process.env.ML_API_KEY || "";
 if (isProduction && mlServiceUrlRaw && !mlApiKey) {
-  // eslint-disable-next-line no-console
   console.error("[config] ML_SERVICE_URL is set but ML_API_KEY is empty. Set ML_API_KEY (same value as the ML service) in production.");
   process.exit(1);
 }

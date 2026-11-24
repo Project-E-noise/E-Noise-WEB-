@@ -5,7 +5,6 @@ import { pgConfig } from "./dbConfig.js";
 const { Pool } = pg;
 
 if (!env.databaseUrl) {
-  // eslint-disable-next-line no-console
   console.warn(
     "[db] DATABASE_URL is not set. Set it in server/.env, e.g.\n" +
       "     DATABASE_URL=postgresql://user:password@localhost:5432/enoise\n" +
@@ -25,7 +24,6 @@ export const pool = new Pool({
 
 pool.on("error", err => {
   // Errors on idle clients (e.g. dropped connections) must not crash the process.
-  // eslint-disable-next-line no-console
   console.error("[db] Unexpected error on idle client:", err.message);
 });
 
