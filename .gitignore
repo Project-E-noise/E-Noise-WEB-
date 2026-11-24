@@ -36,3 +36,6 @@ firmware/**/secrets.h
 
 # Arduino IDE build cache
 firmware/**/build/
+
+# Archives (old snapshots, downloads)
+*.zip
