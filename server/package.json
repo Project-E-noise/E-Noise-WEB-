@@ -2,7 +2,7 @@
   "name": "project-enoise-backend",
   "version": "0.1.0",
   "engines": {
-    "node": ">=20.0.0"
+    "node": "22.x"
   },
   "private": true,
   "type": "module",

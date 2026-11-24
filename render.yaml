@@ -18,6 +18,7 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Node 22, same as engines in server/package.json and .nvmrc.
       - key: NODE_VERSION
         value: "22"
       - key: JWT_SECRET
