@@ -14,6 +14,7 @@
     "db:migrate": "node db/migrate.js",
     "db:seed": "node db/seed.js",
     "db:seed:tables": "node db/seed-tables.js",
+    "admin:create": "node scripts/create-admin.js",
     "simulate": "node scripts/simulate-device.js",
     "test": "node --test --test-concurrency=1"
   },
