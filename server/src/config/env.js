@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import dotenv from "dotenv";
+import { readThresholdDefaults } from "./thresholdDefaults.js";
 
 dotenv.config();
 
@@ -87,6 +88,16 @@ const maxStrikesPerDay = readNumber("MAX_STRIKES_PER_DAY", 1, { min: 1, max: 100
 // No new streak starts on a table for this long after one was decided.
 const violationCooldownSeconds = readNumber("VIOLATION_COOLDOWN_SECONDS", 120, { min: 0, max: 86400, integer: true });
 
+// Thresholds given to NEW tables (provisional, see thresholdDefaults.js).
+let thresholdDefaults;
+try {
+  thresholdDefaults = readThresholdDefaults();
+} catch (err) {
+  // eslint-disable-next-line no-console
+  console.error(`[config] ${err.message}`);
+  process.exit(1);
+}
+
 // ML service. Unset in production = classification off (every loud
 // streak becomes UNVERIFIED). Development defaults to a local service.
 const mlServiceUrlRaw = (process.env.ML_SERVICE_URL || "").trim();
@@ -146,5 +157,7 @@ export const env = {
   minConfidence,
   phoneConfirmationSeconds,
   maxStrikesPerDay,
-  violationCooldownSeconds
+  violationCooldownSeconds,
+  defaultWarningThreshold: thresholdDefaults.warning,
+  defaultCriticalThreshold: thresholdDefaults.critical
 };

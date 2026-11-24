@@ -11,6 +11,7 @@ import { computeLedCounts, computeStatus } from "../utils/ledLogic.js";
 import { categoryDurationSeconds, LABEL_WAIT_SECONDS } from "../utils/violationRules.js";
 import { isMlServiceUp } from "./mlClient.js";
 import { serializeIncident } from "./incidentsService.js";
+import { env } from "../config/env.js";
 
 // 24 h average/peak per table are cached for a minute: they are computed
 // over up to 86,400 rows and were being recomputed on every reading.
@@ -148,7 +149,15 @@ export async function getTable(id) {
   return serializeTable(await findOrFail(id));
 }
 
-const NEW_TABLE_DEFAULTS = { description: "", status: "AVAILABLE", warning_threshold: 50, critical_threshold: 60, confirmation_seconds: 10 };
+// Thresholds come from DEFAULT_WARNING_THRESHOLD / DEFAULT_CRITICAL_THRESHOLD
+// (68 / 75 dB, provisional until calibration; see config/thresholdDefaults.js).
+const NEW_TABLE_DEFAULTS = {
+  description: "",
+  status: "AVAILABLE",
+  warning_threshold: env.defaultWarningThreshold,
+  critical_threshold: env.defaultCriticalThreshold,
+  confirmation_seconds: 10
+};
 
 export async function createTable(body = {}) {
   if (body.table_number === undefined || body.table_number === "") throw badRequest("Table number is required.");

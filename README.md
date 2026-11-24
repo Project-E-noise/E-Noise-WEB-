@@ -215,6 +215,7 @@ Running it again adds nothing new.
 | `PHONE_CONFIRMATION_SECONDS` | | Sustained time once a confident phone label arrived (default `4`, never longer than the table's `confirmation_seconds`; placeholder) |
 | `VIOLATION_COOLDOWN_SECONDS` | | No new streak on a table for this long after one was decided (default `120`) |
 | `MAX_STRIKES_PER_DAY` | | Strikes one occupant can get in any rolling 24 h (default `1`) |
+| `DEFAULT_WARNING_THRESHOLD`, `DEFAULT_CRITICAL_THRESHOLD` | | Thresholds (dB) given to **new** tables, default `68` / `75`. **Provisional until calibration** (Studify's quiet room read ~60 dB, talking ~80-90 dB, uncalibrated). Existing tables keep their own values; change them on the Thresholds page |
 | `SENSOR_STALE_SECONDS` | | A sensor counts as offline after this many seconds without a reading (default 15) |
 | `NOISE_READINGS_RETENTION_DAYS` | | Days raw noise readings are kept; older ones are deleted every hour (default 7, positive whole number) |
 | `VIOLATION_RETENTION_DAYS` | | Days a violation is kept before the daily cleanup deletes it (default 30, positive whole number) |
