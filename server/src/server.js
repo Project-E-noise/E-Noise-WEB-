@@ -16,7 +16,27 @@ const wss = createWsServer(server);
 server.listen(env.port, () => {
   console.log(`[server] Project E-Noise API (${env.nodeEnv}) listening on port ${env.port}`);
   console.log(`[server] WebSocket at /ws. Allowed origins: ${env.corsOrigins.join(", ")}`);
+  logOptionalFeatures();
 });
+
+// One line per optional feature that is off or misconfigured, so the Render
+// log says right away why loud events are UNVERIFIED or emails don't arrive.
+// (MQTT logs its own line in connectMqtt.)
+function logOptionalFeatures() {
+  if (!env.mlServiceUrl) {
+    console.warn("[ml] ML_SERVICE_URL is not set: classification is off, so every sustained loud event is logged as UNVERIFIED (no strikes).");
+  } else {
+    console.log(`[ml] Classifier at ${new URL(env.mlServiceUrl).host}${env.mlApiKey ? " (with API key)" : " (no API key)"}.`);
+  }
+  const provider = env.email.provider || (env.smtp.host ? "smtp" : "");
+  if (provider === "brevo" && !env.email.brevoApiKey) {
+    console.warn("[email] EMAIL_PROVIDER=brevo but BREVO_API_KEY is empty: verification and set-password emails will FAIL. Set the key, or use `npm run admin:create` for the first admin.");
+  } else if (!provider) {
+    console.warn("[email] EMAIL_PROVIDER is not set: emails are not sent; verification links are printed in this log instead.");
+  } else {
+    console.log(`[email] Sending email with ${provider}.`);
+  }
+}
 
 // Starts MQTT ingestion from the sensor nodes (or skips it with a warning).
 connectMqtt();
