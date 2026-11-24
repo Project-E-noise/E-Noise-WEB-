@@ -17,7 +17,10 @@ export const pool = new Pool({
   ...pgConfig(env.databaseUrl, env.nodeEnv),
   // Small pool: one study hub, a handful of admins. Neon free also limits connections.
   max: 10,
-  idleTimeoutMillis: 30000
+  idleTimeoutMillis: 30000,
+  // Give up on a new connection after 10 s instead of waiting for the
+  // operating system's TCP timeout. A sleeping Neon database wakes in ~1-5 s.
+  connectionTimeoutMillis: 10000
 });
 
 pool.on("error", err => {
