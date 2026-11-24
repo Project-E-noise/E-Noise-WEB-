@@ -1,21 +1,17 @@
-import bcrypt from "bcryptjs";
 import { env } from "../config/env.js";
 import * as clientsModel from "../models/clientsModel.js";
 import { BAN_VIOLATION_THRESHOLD } from "../data/constants.js";
 import { badRequest, forbidden, gone, notFound, unauthorized } from "../utils/errors.js";
 import { generateVerificationToken, signSession } from "../utils/tokens.js";
 import * as check from "../utils/validate.js";
+import { hashPassword, checkPassword, VERIFICATION_TOKEN_TTL_MS } from "../utils/passwords.js";
 import { sendVerificationEmail } from "./emailService.js";
 import { currentStrikes } from "./violationsService.js";
-
-const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
-const BCRYPT_ROUNDS = 10;
-const DUMMY_HASH = bcrypt.hashSync("not-a-real-password", BCRYPT_ROUNDS);
 
 function verificationData() {
   return {
     verification_token: generateVerificationToken(),
-    verification_token_expires_at: new Date(Date.now() + VERIFICATION_TTL_MS).toISOString()
+    verification_token_expires_at: new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString()
   };
 }
 
@@ -82,7 +78,7 @@ export async function setPassword(body = {}) {
   if (isExpired(client)) throw gone("This setup link has expired.");
   const newPassword = check.password(body.password);
 
-  const updated = await clientsModel.setPasswordForToken(token, await bcrypt.hash(newPassword, BCRYPT_ROUNDS));
+  const updated = await clientsModel.setPasswordForToken(token, await hashPassword(newPassword));
   // The link was used or expired between the checks above and the update.
   if (!updated) throw notFound("This setup link is invalid.");
   return { message: "Password set. You may now sign in." };
@@ -94,7 +90,7 @@ export async function login(body = {}) {
   if (!email || !password) throw badRequest("Enter your email and password.");
 
   const client = await clientsModel.findByEmail(email);
-  const matches = await bcrypt.compare(password, client?.password_hash || DUMMY_HASH);
+  const matches = await checkPassword(password, client?.password_hash);
   if (!client?.password_hash || !matches) throw unauthorized("Invalid email or password.");
   if (!client.is_active) throw forbidden("This account is inactive.");
   if (!client.email_verified) throw forbidden("Email verification required.");
@@ -115,12 +111,12 @@ export async function updateProfile(id, body = {}) {
 
 export async function changePassword(id, body = {}) {
   const client = await clientsModel.findById(id);
-  if (!client || !await bcrypt.compare(String(body.current_password || ""), client.password_hash || DUMMY_HASH)) {
+  if (!client || !await checkPassword(body.current_password, client.password_hash)) {
     throw badRequest("Current password is incorrect.");
   }
   const newPassword = check.password(body.new_password, "New password");
   if (newPassword === body.current_password) throw badRequest("New password must differ from the current password.");
-  await clientsModel.update(id, { full_name: client.full_name, contact: client.contact || "", password_hash: await bcrypt.hash(newPassword, BCRYPT_ROUNDS) });
+  await clientsModel.update(id, { full_name: client.full_name, contact: client.contact || "", password_hash: await hashPassword(newPassword) });
   return { message: "Password updated." };
 }
 
