@@ -13,6 +13,7 @@ import hmac
 import io
 import logging
 import os
+import shutil
 from contextlib import asynccontextmanager
 
 import numpy as np
@@ -23,6 +24,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
 from category_mapping import CATEGORIES, build_class_index_to_bucket
+from model_cache import broken_cache_dir
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ml-service")
@@ -44,9 +46,22 @@ async def lifespan(_app):
 app = FastAPI(title="Project E-Noise ML Service", lifespan=lifespan)
 
 
+def _load_yamnet():
+    """hub.load(), repairing a half-downloaded model once (see model_cache.py)."""
+    try:
+        return hub.load(YAMNET_URL)
+    except ValueError as err:
+        broken = broken_cache_dir(str(err))
+        if not broken:
+            raise
+        log.warning("Cached YAMNet at %s is incomplete (interrupted download). Deleting it and downloading again.", broken)
+        shutil.rmtree(broken)
+        return hub.load(YAMNET_URL)
+
+
 def load_model():
     log.info("Loading YAMNet from TensorFlow Hub (first run downloads ~15MB)...")
-    model = hub.load(YAMNET_URL)
+    model = _load_yamnet()
 
     class_map_path = model.class_map_path().numpy().decode("utf-8")
     class_names = _load_class_names(class_map_path)

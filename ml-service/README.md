@@ -39,11 +39,15 @@ for the intended upgrade path once you've collected labeled clips.
 
 ```bash
 cd ml-service
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+python -m venv .venv
+.venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8001
+uvicorn app:app --host 127.0.0.1 --port 8001
 ```
+
+The API expects the service on **port 8001** (`ML_SERVICE_URL=http://localhost:8001`).
+`127.0.0.1` keeps it reachable only from this computer (and through the
+Cloudflare tunnel); `0.0.0.0` would open it to everyone on the same Wi-Fi.
 
 First run downloads YAMNet from TensorFlow Hub (~15 MB) and caches it
 locally (`TFHUB_CACHE_DIR`, defaults to a temp dir — set that env var to
@@ -63,9 +67,21 @@ ML_API_KEY=            # optional locally; must match the service's ML_API_KEY
 | `TFHUB_CACHE_DIR` | temp dir | Where YAMNet is cached. |
 | `YAMNET_URL` | `https://tfhub.dev/google/yamnet/1` | Model location (rarely changed). |
 
-If startup fails with "contains neither saved_model.pb nor saved_model.pbtxt",
-an earlier download was interrupted: delete the folder named in the error
-(inside `tfhub_modules`) and start again.
+### Troubleshooting: "contains neither 'saved_model.pb' nor 'saved_model.pbtxt'"
+
+An earlier YAMNet download was interrupted (laptop asleep, Wi-Fi dropped) and
+left a half-empty folder in the TF Hub cache. The service now repairs this by
+itself: it logs `Cached YAMNet at ... is incomplete`, deletes that one folder
+(only if it is inside the TF Hub cache and has no `saved_model.pb`; see
+`model_cache.py`) and downloads the model again (~15 MB, needs internet).
+
+If it still fails (e.g. no internet), delete the folder by hand and start again:
+
+```powershell
+Remove-Item -Recurse -Force "$env:TEMP\tfhub_modules\9616fd04ec2360621642ef9455b84f4b668e219e"
+```
+
+Use the folder named in the error. With `TFHUB_CACHE_DIR` set, it is inside that folder instead.
 
 ## Deploying on Hugging Face Spaces (free CPU)
 
