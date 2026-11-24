@@ -39,8 +39,8 @@ export async function register(body = {}) {
   const existing = await clientsModel.findByEmail(email);
   if (existing?.email_verified && existing.password_hash) return generic;
 
-  // Existing occupant records (added by an admin) only get a fresh token;
-  // their name and contact are not changed by a stranger registering.
+  // An existing, unfinished registration only gets a fresh token; its name
+  // and contact are not changed by someone else registering that address.
   const verification = verificationData();
   const client = existing
     ? await clientsModel.updateVerification(existing.id, { ...verification, consented: true })

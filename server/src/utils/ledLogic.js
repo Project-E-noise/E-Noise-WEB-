@@ -3,11 +3,10 @@
 // Shared by tablesService.js (REST reads) and telemetryService.js (MQTT
 // ingestion), so the two never drift apart.
 //
-// The critical bulb is deliberately NOT decided here — per the spec's
-// "critical LED rule" it may only turn on once a threshold crossing has
-// been sustained for confirmation_seconds, which is a stateful, time-based
-// decision that belongs to telemetryService's confirmation engine, not to
-// a stateless per-reading calculation.
+// The critical bulb is deliberately NOT decided here: it only turns on for a
+// confirmed violation (loud for confirmation_seconds AND a violation sound),
+// which is a stateful decision made by telemetryService's confirmation
+// engine, not by a per-reading calculation.
 
 export function computeLedCounts(dbLevel, table) {
   if (dbLevel == null) return { green: 0, yellow: 0, red: 0 };
@@ -16,6 +15,8 @@ export function computeLedCounts(dbLevel, table) {
   const critical = Number(table.critical_threshold);
 
   if (dbLevel < warning) {
+    // Green shows how close the table is to the warning threshold, in fifths
+    // of it (at least 1 LED, so a working node never looks switched off).
     const green = Math.min(5, Math.max(1, Math.round((dbLevel / warning) * 5)));
     return { green, yellow: 0, red: 0 };
   }

@@ -110,7 +110,7 @@ export function publishLedState(nodeId, ledState) {
 }
 
 /**
- * Asks a device to capture and publish one audio clip now (Phase 7). Not
+ * Asks a device to capture and publish one audio clip now. Not
  * retained — it's a one-off instruction, not standing state. Silently
  * no-ops if MQTT isn't connected, same as publishLedState.
  */
