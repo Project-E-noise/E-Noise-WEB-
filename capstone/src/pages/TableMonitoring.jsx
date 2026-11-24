@@ -12,7 +12,7 @@ import { useRealtime } from "../hooks/useRealtime";
 import { useSystemStatus, MlServiceBadge } from "../hooks/useSystemStatus";
 import { secondsSince, useTick } from "../hooks/useTick";
 import { tablesApi } from "../services/tables";
-import { formatDb, formatDateTime, formatTime, tableLabel, DB_UNIT } from "../utils/formatting";
+import { formatDb, formatDateTime, formatTime, levelLabel, tableLabel, DB_UNIT } from "../utils/formatting";
 import { READINGS_RETENTION_NOTE, STALE_AFTER_SECONDS } from "../constants";
 import { rangeParams } from "../utils/dates";
 
@@ -90,7 +90,7 @@ function TableDetail({ id }) {
   const table = tableQuery.data?.table;
   if (!table) return null;
   const readings = readingsQuery.data?.readings ?? [];
-  const critical = table.status === "CRITICAL";
+  const loud = table.status === "CRITICAL";
   const violation = Boolean(table.led_state?.critical);
   const silentFor = secondsSince(table.sensor_status?.last_seen, now);
   const stale = table.is_online && silentFor != null && silentFor >= STALE_AFTER_SECONDS;
@@ -106,7 +106,7 @@ function TableDetail({ id }) {
             </div>
             <div className="row-inline">
               {violation && <span className="badge badge-crit"><i className="ti ti-alert-octagon" aria-hidden="true" /> VIOLATION</span>}
-              {table.is_online && <span className={`badge ${STATUS_BADGE[table.status]}`}>{table.status}</span>}
+              {table.is_online && <span className={`badge ${STATUS_BADGE[table.status]}`}>{levelLabel(table.status)}</span>}
               <span className={`badge ${table.is_online ? "badge-safe" : "badge-neu"}`}>{table.is_online ? "Online" : "Offline"}</span>
               {table.configured_status === "PAUSED" && <span className="badge badge-neu">Paused</span>}
             </div>
@@ -128,7 +128,7 @@ function TableDetail({ id }) {
 
         <section className="card stack">
           <h2 className="card-title">Occupant and classification</h2>
-          <ClassificationChip classification={table.classification} confidence={table.confidence} critical={critical} />
+          <ClassificationChip classification={table.classification} confidence={table.confidence} critical={loud} />
           <div className="divider" />
           <div>{table.occupant ? <>Assigned to <strong>{table.occupant.full_name}</strong></> : <span className="muted">No occupant assigned</span>}</div>
           <div className={table.violation_count > 0 ? "alert-text" : "muted-small"}>{table.violation_count} violation(s) on record for this occupant</div>

@@ -4,7 +4,7 @@ import { AsyncSection, EmptyState } from "../components/common/UiStates";
 import { useTables } from "../hooks/useTables";
 import { useRealtime, mergeTable } from "../hooks/useRealtime";
 import { tablesApi } from "../services/tables";
-import { formatDb, formatPercent, formatTime, tableLabel, DB_UNIT } from "../utils/formatting";
+import { formatDb, formatPercent, formatTime, levelLabel, tableLabel, DB_UNIT } from "../utils/formatting";
 
 // Live event stream. Every entry is a real reading from the API: a new
 // entry is added only when a table's level actually changes. WebSocket
@@ -90,7 +90,7 @@ export default function RealTimeFeed() {
             <div className="feed-item" key={ev.id}>
               <span className={`feed-dot ${String(ev.table.status).toLowerCase()}`} aria-hidden="true" />
               <div className="feed-content">
-                <div className="feed-title">{tableLabel(ev.table)}: {formatDb(ev.table.current_db)} {DB_UNIT} ({ev.table.status}{ev.table.led_state?.critical ? ", VIOLATION" : ""})</div>
+                <div className="feed-title">{tableLabel(ev.table)}: {formatDb(ev.table.current_db)} {DB_UNIT} ({levelLabel(ev.table.status)}{ev.table.led_state?.critical ? ", VIOLATION" : ""})</div>
                 <div className="feed-desc">
                   {ev.table.classification || "No label"}{ev.table.classification && ev.table.confidence != null ? ` - ${formatPercent(ev.table.confidence)}%` : ""}
                 </div>

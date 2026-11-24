@@ -3,6 +3,16 @@ import { DB_CALIBRATED } from "../constants";
 // Unit label shown next to readings: estimates until the nodes are calibrated.
 export const DB_UNIT = DB_CALIBRATED ? "dB(A)" : "dB (est.)";
 
+// The API's live level (SAFE / WARNING / CRITICAL) only says how loud a table
+// is right now. It is shown as Quiet / Elevated / Loud, so the word "critical"
+// never appears for a sound that isn't a violation (a door slam, traffic).
+// Only a confirmed violation lights the critical bulb and shows "VIOLATION".
+const LEVEL_LABELS = { SAFE: "QUIET", WARNING: "ELEVATED", CRITICAL: "LOUD" };
+
+export function levelLabel(status) {
+  return LEVEL_LABELS[status] || status;
+}
+
 export function formatDb(value) {
   const n = Number(value);
   return value != null && Number.isFinite(n) ? n.toFixed(1) : "--";

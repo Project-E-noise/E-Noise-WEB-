@@ -3,7 +3,7 @@ import { LedArray } from "./LedArray";
 import { ClassificationChip } from "./ClassificationChip";
 import { ConfirmationProgress } from "./ConfirmationProgress";
 import { secondsSince, useTick } from "../../hooks/useTick";
-import { formatDateTime, formatDb, formatTimeAgo, tableLabel, DB_UNIT } from "../../utils/formatting";
+import { formatDateTime, formatDb, formatTimeAgo, levelLabel, tableLabel, DB_UNIT } from "../../utils/formatting";
 import { STALE_AFTER_SECONDS } from "../../constants";
 
 export const STATUS_BADGE = { SAFE: "badge-safe", WARNING: "badge-warn", CRITICAL: "badge-crit" };
@@ -12,14 +12,16 @@ export const STATUS_BADGE = { SAFE: "badge-safe", WARNING: "badge-warn", CRITICA
 export function TableCard({ table }) {
   const now = useTick();
   const status = table.status || "SAFE";
-  const critical = status === "CRITICAL";
+  // Loud = at/above the table's critical threshold right now (any sound).
+  // Violation = a confirmed violation lit the critical bulb.
+  const loud = status === "CRITICAL";
   const violation = Boolean(table.led_state?.critical);
   const silentFor = secondsSince(table.sensor_status?.last_seen, now);
   // Online according to the server, but nothing for a few seconds.
   const stale = table.is_online && silentFor != null && silentFor >= STALE_AFTER_SECONDS;
 
   return (
-    <Link to={`/tables/${table.id}`} className={`table-card ${critical ? "is-critical" : ""} ${violation ? "is-violation" : ""}`}>
+    <Link to={`/tables/${table.id}`} className={`table-card ${loud ? "is-critical" : ""} ${violation ? "is-violation" : ""}`}>
       <div className="zone-hdr">
         <div>
           <div className="zone-name">{tableLabel(table)}</div>
@@ -27,14 +29,14 @@ export function TableCard({ table }) {
         </div>
         <div className="row-inline">
           {violation && <span className="badge badge-crit"><i className="ti ti-alert-octagon" aria-hidden="true" /> VIOLATION</span>}
-          <span className={`badge ${table.is_online ? STATUS_BADGE[status] : "badge-neu"}`}>{table.is_online ? status : "OFFLINE"}</span>
+          <span className={`badge ${table.is_online ? STATUS_BADGE[status] : "badge-neu"}`}>{table.is_online ? levelLabel(status) : "OFFLINE"}</span>
         </div>
       </div>
 
       {table.is_monitoring && <ConfirmationProgress table={table} compact />}
 
       <div className="db-readout">
-        <div className={`db-val ${critical ? "crit-col" : ""} ${stale ? "is-stale" : ""}`}>{formatDb(table.current_db)}</div>
+        <div className={`db-val ${loud ? "crit-col" : ""} ${stale ? "is-stale" : ""}`}>{formatDb(table.current_db)}</div>
         <div className="db-lbl">
           {!table.is_online
             ? `${DB_UNIT} last reading - last seen ${formatTimeAgo(table.sensor_status?.last_seen)}`
@@ -51,7 +53,7 @@ export function TableCard({ table }) {
         <span><span className="mini-label">24h peak</span> {formatDb(table.peak_db)}</span>
       </div>
 
-      <ClassificationChip classification={table.classification} confidence={table.confidence} critical={critical} />
+      <ClassificationChip classification={table.classification} confidence={table.confidence} critical={loud} />
 
       <div className="table-card-footer">
         <span>{table.occupant ? `Occupant: ${table.occupant.full_name}` : "No occupant"}</span>
