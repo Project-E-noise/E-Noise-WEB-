@@ -259,23 +259,30 @@ of every admin and client page at 375 px, 768 px and 1280 px (see `HANDOFF.md`).
 
 ## Simulator (no hardware needed)
 
-Publishes messages exactly like a real node, through the same broker the API uses
-(needs the `HIVEMQ_*` values in `server/.env`, and the API running):
+`tools/simulator/` has virtual nodes that behave like the firmware (same topics,
+payload, dB maths, LED handling and audio clips), a local MQTT broker and a mock
+ML service. See [tools/simulator/README.md](tools/simulator/README.md) for the
+Windows commands. In short:
 
 ```bash
-cd server
-npm run simulate                                         # NODE-001, normal levels
-npm run simulate -- --node NODE-002 --spike              # climbs into critical and holds it
-npm run simulate -- --node NODE-002 --spike --seconds 40 # stops by itself
+cd tools/simulator
+npm install
+node run-scenarios.js                                  # all 22 end-to-end scenarios, local only
+node virtual-node.js --node NODE-002 --scenario talking   # one node, against a local broker
 ```
 
-With `--spike`, watch Live Overview: the table card shows "Loud for 6/10 s", then
-the event is decided. The simulator sends no audio, so without the ML service the
-event is logged as **UNVERIFIED** under Incident Logs -> Filtered (no bulb, no
-strike). Open it there and use "Confirm as violation" (pick a category) to create the
-strike: Maria is on table 2 in the demo data with 2 strikes, so this bans her. With
-real nodes and the ML service running, a loud conversation is confirmed
-automatically and the critical bulb lights. Stop with Ctrl+C or `--seconds`.
+The same virtual node can publish through a real broker (e.g. to test a new one
+before re-flashing the nodes):
+
+```powershell
+$env:SIM_MQTT_USERNAME = "<broker user>"; $env:SIM_MQTT_PASSWORD = "<broker password>"
+node virtual-node.js --broker mqtts://<broker host>:8883 --node NODE-002 --scenario talking
+```
+
+Watch Live Overview: the card shows "Loud for 6/10 s", then the event is decided.
+With the ML service (or mock-ml.js) running, loud talking is CONFIRMED and the
+critical bulb lights; without it the event is logged as **UNVERIFIED** under
+Incident Logs -> Filtered (no bulb, no strike).
 
 ## Security notes
 
@@ -367,8 +374,8 @@ Don't use Render's free Postgres (it expires) or Supabase (not allowed for this 
 > Options: HiveMQ Cloud **Starter** (paid, about $0.34/hour plus messages, 15-day trial),
 > or another hosted broker with TLS on 8883, e.g. **EMQX Serverless** (free quota
 > 1 GB traffic + 1M session-minutes per month: enough for a few nodes during opening
-> hours, not 7 nodes sending every second 24/7). Run `npm run simulate` against the
-> new broker before re-flashing the nodes.
+> hours, not 7 nodes sending every second 24/7). Run `tools/simulator/virtual-node.js`
+> against the new broker before re-flashing the nodes (see Simulator below).
 
 ### 3. Email: Brevo
 

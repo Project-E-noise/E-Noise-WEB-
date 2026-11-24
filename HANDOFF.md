@@ -19,7 +19,7 @@ State (2026-11-10): **working end to end locally.**
 - `npm test` in `server/`: 131/131 pass against a real Postgres test DB (2026-11-17). `python -m unittest discover -s tests` in `ml-service/`: 16/16.
 - Frontend `npm run build`: no warnings (lazy routes; main chunk ~269 kB).
 - Playwright click-through (Chrome, scratch script, not committed): 57/57 checks passed for every admin and client page and flow at 375 / 768 / 1280 px, with no console errors other than intentional 4xx from negative tests.
-- `npm run simulate -- --node NODE-002 --spike` through the real HiveMQ broker: 126 readings stored, CONFIRMED incident after 10 s, 3rd strike banned the occupant and released their seat, critical LED cleared afterwards.
+- (2026-11-10, with the old `npm run simulate` script, since replaced by `tools/simulator/`) `--node NODE-002 --spike` through the real HiveMQ broker: 126 readings stored, CONFIRMED incident after 10 s, 3rd strike banned the occupant and released their seat, critical LED cleared afterwards.
 - Firmware compiles with `arduino-cli` for `esp32:esp32:esp32` (core 3.3.12). The RMS sampling, `analogReadMilliVolts()`, the calibration table and `setCACert()` are **not run on real hardware (unverified)**; `CAL_TABLE` values are placeholders.
 - ML service: `/classify` tested locally (401 without key, 200 with key, 400 for non-audio).
 - Deployment files exist (`render.yaml`, `capstone/vercel.json`, `ml-service/Dockerfile`) but **nothing has been deployed (unverified).**
@@ -34,7 +34,7 @@ State (2026-11-10): **working end to end locally.**
 ## 3. Folder map
 - `capstone/src/`: `pages/` (one file per route, lazy-loaded in `App.jsx`), `components/common/` (FormFields, Modal, UiStates, DataTable, DateRangeFilter, Pager, PagedList, AuthLayout, ProfileForms), `components/layout/` (AppLayout with mobile menu, Sidebar, ClientLayout), `hooks/` (useAsync, useRealtime, useTables...), `services/` (apiClient + one file per API area), `utils/` (dates, formatting, validation), `styles.css` (design tokens in `:root`).
 - `server/src/`: `config/` (env, db, dbConfig for SSL), `middleware/` (auth, errorHandler, rateLimits), `routes/`, `controllers/`, `services/`, `models/`, `mqtt/`, `realtime/wsServer.js`, `utils/validate.js` (all input checks).
-- `server/db/`: `migrations/001-016`, `migrate.js` (exports `runMigrations`), `seed.js`. `server/scripts/simulate-device.js`. `server/tests/` (`fake-ml.js` is a stand-in ML service for tests).
+- `server/db/`: `migrations/001-017`, `migrate.js` (exports `runMigrations`), `seed.js` (demo data), `seed-tables.js` (`npm run db:seed:tables`: the 7 Studify tables only). `server/scripts/create-admin.js` (`npm run admin:create`). `tools/simulator/` (virtual nodes, local broker, mock ML, `run-scenarios.js`). `server/tests/` (`fake-ml.js` is a stand-in ML service for tests).
 - `firmware/enoise_node/`: `enoise_node.ino`, `secrets.example.h` (copy to gitignored `secrets.h`).
 - `ml-service/`: `app.py`, `category_mapping.py` (explicit class lists + verified index ranges), `tests/` (unittest + the YAMNet class map fixture), `finetune_stub.py` (intentionally a stub: no labeled dataset), `Dockerfile`.
 - `docs/HARDWARE_GUIDE.md`: wiring and bench tests.
@@ -81,7 +81,6 @@ Not done / open:
 - Logging out as admin signs that admin out on every device (token_version).
 - Client portal filters use UTC days; admin pages send local-time ISO ranges + `tz`.
 - Retained MQTT status messages set is_online but never update last_seen; only fresh status and telemetry count as heartbeats.
-- `npm run simulate` started through `npm` in Git Bash may not get Ctrl+C; use `--seconds N`.
 
 ## 8. Conventions
 - Errors: services throw `badRequest/notFound/...` from `utils/errors.js`; `errorHandler` returns `{ error }`. Input checks use `utils/validate.js`.
@@ -103,7 +102,7 @@ Not done / open:
 - Bearer tokens in localStorage, so no CSRF token is needed (explained in README).
 
 ## 10. Demo / defense readiness
-Shortest demo without hardware: run API + web app, log in as admin, open Live Overview, run `npm run simulate -- --node NODE-002 --spike --seconds 40` (needs broker credentials in `server/.env`). Expect the "Loud for 6/10 s" bar, then (no audio from the simulator) an UNVERIFIED event under Incident Logs -> Filtered with no bulb and no strike. Click "Confirm as violation", pick a category: Maria (client account) gets her 3rd strike and is banned; log in as the client to show the ban. Without a broker, demo everything else with seeded data and manually logged incidents (3 CONFIRMED incidents on one occupant's table on different days show the ban; the daily cap allows one strike per day, so set `MAX_STRIKES_PER_DAY=3` for a quick demo).
+Shortest demo without hardware: run API + web app, log in as admin, open Live Overview, run `node virtual-node.js --node NODE-002 --scenario talking` from `tools/simulator/` against a local broker (see its README; no cloud accounts needed). Expect the "Loud for 6/10 s" bar, then (without the ML service or mock-ml.js) an UNVERIFIED event under Incident Logs -> Filtered with no bulb and no strike. Click "Confirm as violation", pick a category: Maria (client account) gets her 3rd strike and is banned; log in as the client to show the ban. Without a broker, demo everything else with seeded data and manually logged incidents (3 CONFIRMED incidents on one occupant's table on different days show the ban; the daily cap allows one strike per day, so set `MAX_STRIKES_PER_DAY=3` for a quick demo).
 
 Honest answers: dB values are uncalibrated estimates; the classifier is unvalidated and its confidence threshold is a placeholder; classification now verifies a dB-triggered event (it decides whether it counts), it is not merely supplementary; tests cover the API (131) and the mapping (16), not hardware; the WebSocket token is in the URL because browsers can't set headers there, and logs hide it.
 
