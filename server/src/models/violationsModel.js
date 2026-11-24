@@ -1,8 +1,4 @@
-import { query } from "../config/db.js";
-
-function runnerFor(client) {
-  return client || { query };
-}
+import { query, runnerFor } from "../config/db.js";
 
 export async function forOccupant(occupantId) {
   const { rows } = await query(

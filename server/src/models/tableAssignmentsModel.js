@@ -1,8 +1,4 @@
-import { query } from "../config/db.js";
-
-function runnerFor(client) {
-  return client || { query };
-}
+import { query, runnerFor } from "../config/db.js";
 
 export async function activeForTable(tableId, client) {
   const { rows } = await runnerFor(client).query(

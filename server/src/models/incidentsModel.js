@@ -1,8 +1,4 @@
-import { query } from "../config/db.js";
-
-function runnerFor(client) {
-  return client || { query };
-}
+import { query, runnerFor } from "../config/db.js";
 
 // Incidents joined with their table number and occupant name, so the API
 // doesn't need extra queries per row.

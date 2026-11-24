@@ -1,4 +1,4 @@
-import { query } from "../config/db.js";
+import { query, runnerFor } from "../config/db.js";
 
 // A ban ends by itself once ban_until has passed. Every read uses this
 // expression as `status`, so an ended ban reads as ACTIVE even though the
@@ -8,10 +8,6 @@ export const EFFECTIVE_STATUS = "CASE WHEN status = 'BANNED' AND ban_until <= NO
 // they finished signing up themselves (required before being seated).
 const COLUMNS = `id, full_name, email, contact, ${EFFECTIVE_STATUS} AS status, ban_started_at, ban_until,
   strikes_since, ban_strikes_since, (email_verified AND password_hash IS NOT NULL) AS account_ready, consented_at, created_at, updated_at`;
-
-function runnerFor(client) {
-  return client || { query };
-}
 
 export async function findAll({ q } = {}) {
   // Escape % and _ so a search for "50%" means the text "50%".

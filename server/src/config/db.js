@@ -33,6 +33,14 @@ export function query(text, params) {
 }
 
 /**
+ * For model functions that take an optional `client`: inside a transaction
+ * (withTransaction) they must use that client, otherwise the pool.
+ */
+export function runnerFor(client) {
+  return client || { query };
+}
+
+/**
  * Run `fn` inside a single client with an open transaction, committing on
  * success and rolling back on any thrown error. Use this whenever a
  * request needs more than one write to stay atomic (e.g. incident +
