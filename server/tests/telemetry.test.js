@@ -59,7 +59,7 @@ async function loud(reading, from, to, db = 70) {
 }
 
 test("parseTelemetry accepts good payloads and rejects bad ones", () => {
-  assert.deepEqual(parseTelemetry(Buffer.from('{"db_level":62.4}')), { db_level: 62.4, classification: null, confidence: null, timestamp: null });
+  assert.deepEqual(parseTelemetry(Buffer.from('{"db_level":62.4}')), { db_level: 62.4, classification: null, confidence: null, timestamp: null, fw: null });
   assert.ok(parseTelemetry(Buffer.from("not json")).error);
   assert.ok(parseTelemetry(Buffer.from("null")).error);
   assert.ok(parseTelemetry(Buffer.from('{"db_level":"loud"}')).error);

@@ -28,6 +28,18 @@ const iso = date => new Date(date).toISOString();
 const warnedUnknownNodeIds = new Set();
 
 /**
+ * Per-node calibration (docs/CALIBRATION.md): the table row holds the
+ * node's gain and offset, found by comparing it with a reference meter.
+ * corrected = gain x raw + offset, kept in 0-200 dB. Defaults x1 / +0 dB.
+ */
+export function applyCalibration(rawDb, table) {
+  const gain = table.calibration_gain != null ? Number(table.calibration_gain) : 1;
+  const offset = table.calibration_offset_db != null ? Number(table.calibration_offset_db) : 0;
+  const corrected = gain * rawDb + offset;
+  return Math.round(Math.min(200, Math.max(0, corrected)) * 100) / 100;
+}
+
+/**
  * Handles one telemetry message: store the reading, run the confirmation
  * engine, send the LED state back to the device, and push the update to
  * open dashboards. `now` is when the message arrived (mqttClient.js), or a
@@ -36,7 +48,7 @@ const warnedUnknownNodeIds = new Set();
  * mqttClient.js processes messages for the same node one at a time, so two
  * readings can never run the engine at the same moment for one table.
  */
-export async function ingestTelemetry(nodeId, { db_level, classification, confidence, timestamp }, { now: clock } = {}) {
+export async function ingestTelemetry(nodeId, { db_level: rawDb, classification, confidence, timestamp, fw }, { now: clock } = {}) {
   const table = await tablesModel.findBySensorNodeId(nodeId);
   if (!table) {
     if (!warnedUnknownNodeIds.has(nodeId)) {
@@ -50,9 +62,15 @@ export async function ingestTelemetry(nodeId, { db_level, classification, confid
   const previous = await sensorStatusModel.findByTableId(table.id);
   if (!previous) return;
 
+  // Everything from here on (stored reading, thresholds, LEDs, violations)
+  // uses the calibrated value.
+  const db_level = applyCalibration(rawDb, table);
+
   await noiseReadingsModel.create({ table_id: table.id, db_level, classification, confidence, recorded_at: timestamp || iso(now) });
   await sensorStatusModel.recordTelemetry(table.id, {
     current_db: db_level,
+    raw_db: rawDb,
+    firmware_version: fw,
     classification,
     confidence,
     clearClassification: !classification && db_level < Number(table.warning_threshold),

@@ -57,16 +57,17 @@ export async function setOnline(tableId, isOnline, { touchLastSeen = true } = {}
 // Classification: the firmware doesn't send one, so a missing value keeps
 // the last ML result instead of wiping it. When the table is quiet again
 // (clearClassification), the old label is cleared.
-export async function recordTelemetry(tableId, { current_db, classification, confidence, clearClassification, seenAt }) {
+export async function recordTelemetry(tableId, { current_db, raw_db, firmware_version, classification, confidence, clearClassification, seenAt }) {
   const { rows } = await query(
     `UPDATE sensor_status
-     SET is_online = TRUE, last_seen = $6, current_db = $2,
+     SET is_online = TRUE, last_seen = $6, current_db = $2, raw_db = $7,
+         firmware_version = COALESCE($8, firmware_version),
          classification = CASE WHEN $5 THEN NULL WHEN $3::text IS NOT NULL THEN $3 ELSE classification END,
          confidence = CASE WHEN $5 THEN NULL WHEN $3::text IS NOT NULL THEN $4 ELSE confidence END,
          updated_at = NOW()
      WHERE table_id = $1
      RETURNING *`,
-    [tableId, current_db, classification ?? null, confidence ?? null, Boolean(clearClassification), seenAt]
+    [tableId, current_db, classification ?? null, confidence ?? null, Boolean(clearClassification), seenAt, raw_db ?? current_db, firmware_version ?? null]
   );
   return rows[0] || null;
 }

@@ -37,7 +37,9 @@ export async function updateThreshold(tableId, body = {}) {
     status,
     warning_threshold: warning,
     critical_threshold: critical,
-    confirmation_seconds: confirmation
+    confirmation_seconds: confirmation,
+    calibration_offset_db: table.calibration_offset_db,
+    calibration_gain: table.calibration_gain
   });
   return serializeThreshold(updated);
 }

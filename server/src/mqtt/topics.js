@@ -55,7 +55,8 @@ export function nodeIdFromTopic(topic) {
 /**
  * Telemetry payload published by the device, once per sample:
  *   {
- *     "db_level": 62.4,               // required, estimated dB from the MAX9814 (no A-weighting, see firmware)
+ *     "db_level": 62.4,
+ *     "fw": "1.1.0",                  // optional, firmware version               // required, estimated dB from the MAX9814 (no A-weighting, see firmware)
  *     "classification": "Loud Conversation",   // optional — omit if the device
  *     "confidence": 0.87,                      //   doesn't run on-device inference;
  *                                               //   YAMNet runs server-side
@@ -87,6 +88,9 @@ export function parseTelemetry(raw) {
   const conf = Number(data.confidence);
   if (data.confidence != null && Number.isFinite(conf) && conf >= 0 && conf <= 1) confidence = conf;
 
+  // Firmware version, e.g. "1.1.0" (firmware 1.1+). Anything odd is dropped.
+  const fw = typeof data.fw === "string" && /^[A-Za-z0-9._+-]{1,20}$/.test(data.fw) ? data.fw : null;
+
   let timestamp = null;
   if (data.timestamp) {
     // Ignore device clocks that are clearly wrong (more than a day off).
@@ -96,7 +100,7 @@ export function parseTelemetry(raw) {
     }
   }
 
-  return { db_level, classification, confidence, timestamp };
+  return { db_level, classification, confidence, timestamp, fw };
 }
 
 /**

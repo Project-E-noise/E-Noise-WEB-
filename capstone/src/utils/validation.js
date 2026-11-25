@@ -26,6 +26,15 @@ export function confirmationDurationIssue(value) {
   return null;
 }
 
+/** Per-node calibration (docs/CALIBRATION.md): offset -40..40 dB, gain 0.5..2. */
+export function calibrationIssue(offset, gain) {
+  const o = Number(offset);
+  const g = Number(gain);
+  if (String(offset).trim() === "" || !Number.isFinite(o) || o < -40 || o > 40) return { calibration_offset_db: "Offset must be a number between -40 and 40 dB." };
+  if (String(gain).trim() === "" || !Number.isFinite(g) || g < 0.5 || g > 2) return { calibration_gain: "Gain must be a number between 0.5 and 2." };
+  return null;
+}
+
 export function tableNumberIssue(value) {
   const n = Number(value);
   if (value === "" || !Number.isInteger(n) || n < 1 || n > 9999) return "Table number must be a whole number from 1 to 9999.";

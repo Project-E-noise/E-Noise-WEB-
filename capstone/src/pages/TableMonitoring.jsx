@@ -123,6 +123,10 @@ function TableDetail({ id }) {
           <div className="muted-small">
             Thresholds: warning {table.warning_threshold} dB, critical {table.critical_threshold} dB, decided after {table.confirmation_seconds}s of sustained noise.
             Last seen {table.sensor_status?.last_seen ? formatDateTime(table.sensor_status.last_seen) : "never"}.
+            {table.sensor_status?.raw_db != null && (table.calibration_offset_db !== 0 || table.calibration_gain !== 1) && (
+              <> Node sent {formatDb(table.sensor_status.raw_db)} before calibration (x{table.calibration_gain} {table.calibration_offset_db >= 0 ? "+" : ""}{table.calibration_offset_db} dB).</>
+            )}
+            {table.sensor_status?.firmware_version && <> Firmware {table.sensor_status.firmware_version}.</>}
             {table.cooldown_until && <> Cooldown until {formatTime(table.cooldown_until)}.</>}
           </div>
         </section>

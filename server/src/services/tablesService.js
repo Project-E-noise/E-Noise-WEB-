@@ -82,6 +82,8 @@ export async function serializeTable(table) {
     warning_threshold: Number(table.warning_threshold),
     critical_threshold: Number(table.critical_threshold),
     confirmation_seconds: table.confirmation_seconds,
+    calibration_offset_db: Number(table.calibration_offset_db ?? 0),
+    calibration_gain: Number(table.calibration_gain ?? 1),
     // configured_status is the admin setting (AVAILABLE/PAUSED/...);
     // status is the live noise level (SAFE/WARNING/CRITICAL).
     configured_status: table.status,
@@ -92,7 +94,15 @@ export async function serializeTable(table) {
     is_monitoring: Boolean(sensorStatus?.monitoring_since) && !sensorStatus?.active_incident_id,
     monitoring: monitoringBlock(table, sensorStatus),
     cooldown_until: sensorStatus?.cooldown_until && new Date(sensorStatus.cooldown_until) > new Date() ? sensorStatus.cooldown_until : null,
-    sensor_status: sensorStatus ? { is_online: sensorStatus.effective_online, last_seen: sensorStatus.last_seen } : null,
+    sensor_status: sensorStatus
+      ? {
+          is_online: sensorStatus.effective_online,
+          last_seen: sensorStatus.last_seen,
+          // As the node sent it, before calibration (for checking a calibration).
+          raw_db: sensorStatus.raw_db != null ? Number(sensorStatus.raw_db) : null,
+          firmware_version: sensorStatus.firmware_version ?? null
+        }
+      : null,
     current_db: dbLevel,
     avg_db: stats.avg_db,
     peak_db: stats.peak_db,
@@ -129,7 +139,10 @@ function readTableFields(body, current) {
     status: check.oneOf(pick("status"), "Status", TABLE_STATUSES),
     warning_threshold: check.number(pick("warning_threshold"), "Warning threshold", { min: 0, max: 150 }),
     critical_threshold: check.number(pick("critical_threshold"), "Critical threshold", { min: 0, max: 150 }),
-    confirmation_seconds: check.number(pick("confirmation_seconds"), "Confirmation duration", { min: 0, max: 3600, integer: true })
+    confirmation_seconds: check.number(pick("confirmation_seconds"), "Confirmation duration", { min: 0, max: 3600, integer: true }),
+    // Per-node calibration (docs/CALIBRATION.md): corrected = gain x raw + offset.
+    calibration_offset_db: check.number(pick("calibration_offset_db"), "Calibration offset", { min: -40, max: 40 }),
+    calibration_gain: check.number(pick("calibration_gain"), "Calibration gain", { min: 0.5, max: 2 })
   };
   if (fields.warning_threshold >= fields.critical_threshold) throw badRequest("Warning threshold must be less than the critical threshold.");
   return fields;
@@ -156,7 +169,9 @@ const NEW_TABLE_DEFAULTS = {
   status: "AVAILABLE",
   warning_threshold: env.defaultWarningThreshold,
   critical_threshold: env.defaultCriticalThreshold,
-  confirmation_seconds: 10
+  confirmation_seconds: 10,
+  calibration_offset_db: 0,
+  calibration_gain: 1
 };
 
 export async function createTable(body = {}) {
