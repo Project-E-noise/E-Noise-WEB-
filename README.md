@@ -107,7 +107,7 @@ Table Configuration is all it takes to register a node.
 
 ## Local setup
 
-You need **Node.js 20+**, **PostgreSQL 14+** and **git**. Python 3.11 only if you want
+You need **Node.js 22** (see `.nvmrc`; Render and Vercel use 22 too), **PostgreSQL 14+** and **git**. Python 3.11 only if you want
 the ML service; the Arduino IDE or `arduino-cli` only for the firmware.
 
 On Windows PowerShell, if `npm` is blocked by the execution policy, use `npm.cmd`.
@@ -238,9 +238,10 @@ Running it again adds nothing new.
 cd server
 # .env must contain TEST_DATABASE_URL=postgresql://user:password@localhost:5432/enoise_test
 npm test
+npm run lint      # ESLint (also in capstone/)
 ```
 
-131 tests (`node:test` + `supertest`) run against a real Postgres database. The
+145 tests (`node:test` + `supertest`) run against a real Postgres database. The
 test database is wiped and migrated first. They cover every endpoint (success and
 main error cases), admin/client role checks and data scoping, the
 incident -> violation -> ban transaction (including rollback and concurrent
@@ -249,10 +250,13 @@ engine (`decideVerdict`, dip tolerance, reading gaps, label wait, cooldown, PAUS
 tables, occupant at streak start, atomic label append), the daily strike cap and
 ban lift by recount, the ML client and its health tracking, the audio-request
 window, admin token revocation, exports (incl. CSV formula escaping), analytics,
-WebSocket authentication, and that the category strings match across JS, SQL and
-Python. The engine tests pass simulated times, so they run without sleeping.
+WebSocket authentication, that the category strings match across JS, SQL and
+Python, the production start-up checks, `/health/db`, migration 017's node-ID rule,
+`db:seed:tables` and `admin:create`. The engine tests pass simulated times, so they run without sleeping.
 
-The ML service has 16 mapping tests: `cd ml-service && python -m unittest discover -s tests`.
+The ML service has 20 tests (class mapping and the model-cache repair): `cd ml-service && python -m unittest discover -s tests`.
+The calibration tool has 4: `cd tools/calibration && node --test`. End-to-end checks
+(22 scenarios, no hardware or cloud): `cd tools/simulator && node run-scenarios.js`.
 
 The frontend has no unit tests; it was checked with a Playwright click-through
 of every admin and client page at 375 px, 768 px and 1280 px (see `HANDOFF.md`).
@@ -343,18 +347,26 @@ on them.
 
 ### 1. Database: Neon
 
-1. Create a Neon project (region near your users, e.g. Singapore).
-2. Copy the connection string (it ends with `?sslmode=require`). The API turns on
-   SSL automatically for it.
-3. Create the tables and seed from your computer:
-   ```bash
+Step-by-step, with checkboxes: [DEPLOY_CHECKLIST.md](DEPLOY_CHECKLIST.md).
+
+1. Create a Neon project in **AWS Asia Pacific (Singapore)** (the API runs in
+   Render's Singapore region, next to it).
+2. **Connect** -> copy the connection string with **Connection pooling off** for
+   migrations, and keep the one with pooling **on** for Render. Both end with
+   `?sslmode=require`; the API turns on SSL (with certificate checks) for it.
+3. From your computer (PowerShell), create the schema and the 7 Studify tables:
+   ```powershell
    cd server
-   # PowerShell: $env:DATABASE_URL="postgresql://...neon.tech/neondb?sslmode=require"
-   DATABASE_URL="postgresql://...neon.tech/neondb?sslmode=require" npm run db:migrate
-   DATABASE_URL="..." NODE_ENV=production SEED_ADMIN_PASSWORD="<strong password>" SEED_CLIENT_PASSWORD="<strong password>" npm run db:seed
+   $env:DATABASE_URL = "<Neon string, pooling off>"
+   npm run db:migrate          # schema only (migrations 001-017)
+   npm run db:seed:tables      # tables 1-7 = NODE-001..007, default thresholds, table 7 PAUSED
+   Remove-Item Env:DATABASE_URL
    ```
-   Skip the seed if you don't want demo data in production (then create the first
-   admin through `/register` with `ADMIN_SIGNUP_CODE`).
+   Don't run `npm run db:seed` on the production database: it adds demo people and
+   fake history. **Render does not run migrations:** run `npm run db:migrate`
+   again after every new migration.
+4. The first admin registers at `/register` with `ADMIN_SIGNUP_CODE` and verifies
+   by email. If email isn't working, use `npm run admin:create` (DEPLOY_CHECKLIST.md).
 
 Don't use Render's free Postgres (it expires) or Supabase (not allowed for this project).
 
@@ -387,13 +399,17 @@ Don't use Render's free Postgres (it expires) or Supabase (not allowed for this 
 
 1. Push this repo to GitHub.
 2. Render -> **New -> Blueprint** -> pick the repo. `render.yaml` creates the free
-   web service `enoise-api` (root `server/`, `npm ci --omit=dev`, `npm start`,
-   health check `/health`) and generates `JWT_SECRET`.
-3. Fill in the values it asks for:
-   `DATABASE_URL` (Neon), `CORS_ORIGIN` (your Vercel URL(s)), `CLIENT_URL` (main Vercel URL),
-   `ADMIN_SIGNUP_CODE`, `EMAIL_FROM`, `BREVO_API_KEY`, the `HIVEMQ_*` values, and
-   `ML_SERVICE_URL` / `ML_API_KEY` (leave empty if you don't run the ML service).
-4. After deploy, open `https://<service>.onrender.com/health`.
+   web service `enoise-api` in the **Singapore** region (root `server/`, Node 22,
+   `npm ci --omit=dev`, `npm start`, health check `/health`) and generates
+   `JWT_SECRET`. The region can't be changed later.
+3. Fill in the values it asks for (table in DEPLOY_CHECKLIST.md):
+   `DATABASE_URL` (Neon, pooled), `CORS_ORIGIN` (your Vercel URL(s)), `CLIENT_URL` (main Vercel URL),
+   `ADMIN_SIGNUP_CODE`, `EMAIL_FROM`, `BREVO_API_KEY` (**required** for verification and
+   set-password emails), the `HIVEMQ_*` values, and `ML_SERVICE_URL` / `ML_API_KEY`
+   (leave empty if you don't run the ML service). In production the API refuses to start
+   without `JWT_SECRET`, `DATABASE_URL`, `CORS_ORIGIN` and `CLIENT_URL`.
+4. After deploy, open `https://<service>.onrender.com/health` (no database) and
+   `/health/db` (checks the database). The start-up log says whether ML and email are on.
 
 **Keeping it awake.** A sleeping free service drops its MQTT connection, so live
 readings stop until someone opens the site (wake-up takes about a minute; the
@@ -402,7 +418,10 @@ while it sleeps are lost. During opening hours, keep it awake with a free monito
 
 - [UptimeRobot](https://uptimerobot.com) (HTTP monitor, 5-minute interval) or
   [cron-job.org](https://cron-job.org) (every 10 minutes) calling `https://<service>.onrender.com/health`.
-- `/health` doesn't touch the database, so Neon can still sleep.
+- `/health` doesn't touch the database. But while the API is awake, its 15-second
+  offline check queries the database, so **Neon never sleeps either** (about 180
+  compute hours a month if awake 24/7; the free plan has 100). See
+  [docs/DB_LOAD_PROPOSAL.md](docs/DB_LOAD_PROPOSAL.md).
 - One service awake all month uses ~744 of the 750 free hours. Don't run a second
   free service in the same Render workspace around the clock.
 
@@ -412,6 +431,7 @@ while it sleeps are lost. During opening hours, keep it awake with a free monito
    (framework Vite, build `npm run build`, output `dist`; `capstone/vercel.json`
    already sends every path to `index.html`, so deep links and email links work).
 2. Environment variable: `VITE_API_BASE_URL=https://<service>.onrender.com`. Redeploy after changing it.
+   The build **fails** if it is missing (on purpose: otherwise the site would call localhost).
 3. Add the Vercel URL to `CORS_ORIGIN` and `CLIENT_URL` on Render. Preview deployments
    have their own URLs: add a pattern such as `https://enoise-*-<your-vercel-name>.vercel.app`
    to `CORS_ORIGIN` if you want previews to reach the API.
