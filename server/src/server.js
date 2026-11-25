@@ -4,7 +4,7 @@ import { env } from "./config/env.js";
 import { pool } from "./config/db.js";
 import { createWsServer } from "./realtime/wsServer.js";
 import { connectMqtt, disconnectMqtt } from "./mqtt/mqttClient.js";
-import { sweepStaleSensors } from "./services/telemetryService.js";
+import { sweepStaleSensors, sweepNeeded, noteSweepDone } from "./services/telemetryService.js";
 import { cleanupOldReadings, cleanupPersonalData } from "./services/retentionService.js";
 import { checkMlHealth } from "./services/mlClient.js";
 import { flushReadings, WINDOW_SECONDS } from "./services/readingWindows.js";
@@ -43,11 +43,15 @@ function logOptionalFeatures() {
 connectMqtt();
 
 // Every 15 s, mark sensors that went silent as offline. A database outage
-// only logs a warning; the next run tries again.
+// only logs a warning; the next run tries again. Skipped while no node has
+// sent anything (sweepNeeded), so Neon can sleep when the nodes are off.
 const SENSOR_SWEEP_MS = 15000;
 async function runSensorSweep() {
+  if (!sweepNeeded()) return;
+  const startedAt = Date.now();
   try {
     const changed = await sweepStaleSensors();
+    noteSweepDone(startedAt);
     if (changed.length) console.log(`[sensors] Marked ${changed.length} silent sensor(s) offline.`);
   } catch (err) {
     console.warn(`[sensors] Offline sweep failed: ${err.message || err.code || "database unreachable"}`);
@@ -91,9 +95,10 @@ async function runViolationCleanup() {
 runViolationCleanup();
 const violationCleanupTimer = setInterval(runViolationCleanup, VIOLATION_CLEANUP_MS);
 
-// Once at startup, then every hour: delete raw noise readings older than
-// NOISE_READINGS_RETENTION_DAYS (in batches). Errors only log a warning.
-const READINGS_CLEANUP_MS = 60 * 60 * 1000;
+// Once at startup, then every 24 h: delete raw noise readings older than
+// NOISE_READINGS_RETENTION_DAYS (in batches). Daily, not hourly, so it
+// doesn't wake a sleeping Neon every hour. Errors only log a warning.
+const READINGS_CLEANUP_MS = 24 * 60 * 60 * 1000;
 async function runReadingsCleanup() {
   try {
     const deleted = await cleanupOldReadings();

@@ -269,6 +269,33 @@ export async function ingestStatus(nodeId, { online }, { retained = false } = {}
   broadcastTableUpdate(await serializeTable(table));
 }
 
+// ---- Letting the database sleep (docs/DB_LOAD_PROPOSAL.md, P1) -----------
+// Neon only sleeps after 5 minutes without queries. The offline sweep below
+// is the only thing that queries it while every node is off, so server.js
+// skips it when it can't change anything.
+let lastNodeMessageAt = 0;
+let lastSweepAt = null;
+
+/** Called for every MQTT message from a node (mqttClient.js). */
+export function noteNodeMessage(at = Date.now()) {
+  lastNodeMessageAt = Math.max(lastNodeMessageAt, new Date(at).getTime());
+}
+
+/**
+ * False when the previous sweep already ran more than SENSOR_STALE_SECONDS
+ * after the last message from any node: that sweep marked every node
+ * offline, and nothing has arrived since, so there is nothing to do.
+ */
+export function sweepNeeded(staleSeconds = env.sensorStaleSeconds) {
+  if (lastSweepAt === null) return true;
+  return lastNodeMessageAt >= lastSweepAt - staleSeconds * 1000;
+}
+
+/** Remembers when a successful sweep started. */
+export function noteSweepDone(startedAt) {
+  lastSweepAt = new Date(startedAt).getTime();
+}
+
 /**
  * Heartbeat sweep (run every 15 s from server.js). A node that loses power
  * may never send "offline" (e.g. the API was down when its Last Will fired),

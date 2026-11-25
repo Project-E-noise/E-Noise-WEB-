@@ -12,7 +12,7 @@ import {
   audioRequestTopic,
   buildAudioRequestPayload
 } from "./topics.js";
-import { ingestTelemetry, ingestStatus, ingestAudioClip } from "../services/telemetryService.js";
+import { ingestTelemetry, ingestStatus, ingestAudioClip, noteNodeMessage } from "../services/telemetryService.js";
 
 let client = null;
 
@@ -22,7 +22,7 @@ let client = null;
 const nodeQueues = new Map();
 function runInOrder(nodeId, task) {
   const previous = nodeQueues.get(nodeId) || Promise.resolve();
-  const next = previous.then(task).catch(err => console.error(`[mqtt] Failed to process message from ${nodeId}:`, err.message));
+  const next = previous.then(task).then(() => noteNodeMessage()).catch(err => console.error(`[mqtt] Failed to process message from ${nodeId}:`, err.message));
   nodeQueues.set(nodeId, next);
   next.finally(() => {
     if (nodeQueues.get(nodeId) === next) nodeQueues.delete(nodeId);
@@ -75,6 +75,7 @@ export function connectMqtt() {
     // after another, so when the database is slow a reading may be handled a
     // little later; the loud-streak timer must still use the real time.
     const receivedAt = new Date();
+    noteNodeMessage(receivedAt);
 
     if (topic.endsWith("/telemetry")) {
       const parsed = parseTelemetry(payload);
