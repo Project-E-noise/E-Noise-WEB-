@@ -324,9 +324,9 @@ async function setupTables() {
 async function sQuietAndSeedThresholds() {
   const since = new Date().toISOString();
   const t0 = Date.now();
-  const [n1, n6] = await playAndWait([[1, "quiet"], [6, "quiet"]], { after: 12000 });
+  const [n1, n6] = await playAndWait([[1, "quiet"], [6, "quiet"]], { after: 22000 });
   const inc1 = await incidentsSince(1, since);
-  const readings = (await q("SELECT COUNT(*)::int AS n FROM noise_readings WHERE table_id = $1 AND created_at >= $2", [tables[1].id, since]))[0].n;
+  const readings = (await q("SELECT COALESCE(SUM(samples), 0)::int AS n FROM noise_readings WHERE table_id = $1 AND created_at >= $2", [tables[1].id, since]))[0].n;
   const updates = wsUpdates(1, t0).length;
   record(
     "S1",
@@ -530,9 +530,12 @@ async function sRepeatOffender() {
 
 async function sFiveNodes() {
   await seat("f", 2); // A was banned and released
+  // Readings are stored in 10 s windows: let earlier scenarios' last windows
+  // be written first, and wait for this one's before counting.
+  await sleep(21000);
   const since = new Date().toISOString();
   const plan = [[1, "quiet"], [2, "talking"], [3, "false_mix"], [4, "music"], [5, "traffic_jam"]];
-  const nodes = await playAndWait(plan, { after: 12000 });
+  const nodes = await playAndWait(plan, { after: 22000 });
   const got = {};
   for (const [t] of plan) got[t] = await incidentsSince(t, since);
   const ok =
@@ -542,7 +545,7 @@ async function sFiveNodes() {
     got[4].length === 1 && got[4][0].category === "Music" && got[4][0].occupant?.id === occupants.c.id &&
     got[5].length === 1 && got[5][0].status === "IGNORED" && got[5][0].top_class === "Traffic noise, roadway noise";
   const counts = [];
-  for (const [t] of plan) counts.push((await q("SELECT COUNT(*)::int AS n FROM noise_readings WHERE table_id = $1 AND created_at >= $2", [tables[t].id, since]))[0].n);
+  for (const [t] of plan) counts.push((await q("SELECT COALESCE(SUM(samples), 0)::int AS n FROM noise_readings WHERE table_id = $1 AND created_at >= $2", [tables[t].id, since]))[0].n);
   record(
     "S8",
     "5 nodes at once (quiet / talking / false sounds / music / traffic)",
@@ -618,7 +621,7 @@ async function sMalformed() {
   const badStatus = log.includes("Bad status from NODE-001");
   const nonWav = log.includes("Ignoring non-WAV audio payload from NODE-001");
   const unrequested = log.includes("Ignoring unrequested audio clip from NODE-001");
-  const rows = (await q("SELECT COUNT(*)::int AS n FROM noise_readings WHERE table_id = $1 AND created_at >= $2", [tables[1].id, since]))[0].n;
+  const rows = (await q("SELECT COALESCE(SUM(samples), 0)::int AS n FROM noise_readings WHERE table_id = $1 AND created_at >= $2", [tables[1].id, since]))[0].n;
   const ghost = (await q("SELECT COUNT(*)::int AS n FROM tables WHERE sensor_node_id = 'NODE-999'"))[0].n;
   const alive = (await api("GET", "/health")).status === 200;
   record(
@@ -640,9 +643,9 @@ async function sRestart() {
   const healthDown = await api("GET", "/health").then(r => r.status).catch(() => "no answer");
   const marker = await startServer(ml.url);
   const tUp = new Date().toISOString();
-  await sleep(8000);
+  await sleep(16000); // readings are stored in 10 s windows
   const log = serverLog.slice(marker);
-  const after = (await q("SELECT COUNT(*)::int AS n FROM noise_readings WHERE table_id = $1 AND created_at >= $2", [tables[1].id, tUp]))[0].n;
+  const after = (await q("SELECT COALESCE(SUM(samples), 0)::int AS n FROM noise_readings WHERE table_id = $1 AND created_at >= $2", [tables[1].id, tUp]))[0].n;
   const reconnected = ws.messages.filter(m => m.type === "connected").length > connectedBefore;
   const online = (await tableNow(1)).is_online;
   await node.stop({ abrupt: false });
@@ -650,7 +653,7 @@ async function sRestart() {
     "S11",
     "API killed mid-stream and restarted",
     "Recovers, reconnects to the broker, keeps ingesting",
-    `while down: /health ${healthDown}; after restart: MQTT subscribed ${log.includes("[mqtt] Subscribed")}, ${after} new readings in 8 s, dashboard WebSocket reconnected ${reconnected}, table online ${online}`,
+    `while down: /health ${healthDown}; after restart: MQTT subscribed ${log.includes("[mqtt] Subscribed")}, ${after} new readings stored in 16 s, dashboard WebSocket reconnected ${reconnected}, table online ${online}`,
     log.includes("[mqtt] Subscribed") && after >= 5 && reconnected && online,
     `down at ${tDown}, up at ${tUp}. Readings sent while the API was down are lost (no persistent MQTT session).`
   );
@@ -696,6 +699,26 @@ async function sRetention() {
     `31-day violation deleted ${oldGone}; 29-day violation kept ${recentKept}; 31-day incident unlinked from occupant ${oldInc?.occupant_id === null}; 8-day raw reading deleted ${readingGone}; 31-day released seat record deleted ${seatGone}`,
     oldGone && recentKept && oldInc?.occupant_id === null && readingGone && seatGone,
     "Cleanup runs at API start-up and every 24 h after that (and every hour for raw readings)."
+  );
+}
+
+async function sCalibration() {
+  // A node whose microphone reads 4.5 dB low, corrected on the server by a
+  // +4.5 dB calibration offset entered through the API (Table Configuration).
+  const set = await api("PUT", `/api/tables/${tables[5].id}`, { token: adminToken, body: { calibration_offset_db: 4.5, calibration_gain: 1 } });
+  const node = play(5, "quiet", { seconds: 0, offset: -4.5 });
+  await sleep(8000);
+  const t = await tableNow(5);
+  await node.stop({ abrupt: false });
+  await api("PUT", `/api/tables/${tables[5].id}`, { token: adminToken, body: { calibration_offset_db: 0 } });
+  const raw = t?.sensor_status?.raw_db;
+  const lastSent = node.stats.readings[node.stats.readings.length - 1];
+  record(
+    "S13",
+    "Calibrated node: microphone reads 4.5 dB low, offset +4.5 dB set in the dashboard",
+    "Stored/shown value = raw + 4.5 dB; raw value and firmware version visible",
+    `offset saved ${set.status === 200}; node sent ${lastSent} dB -> raw_db ${raw}, shown ${t?.current_db} dB; firmware ${t?.sensor_status?.firmware_version}`,
+    set.status === 200 && raw === lastSent && Math.abs(t.current_db - (raw + 4.5)) < 0.01 && t.sensor_status.firmware_version === "1.1.0"
   );
 }
 
@@ -754,6 +777,7 @@ async function main() {
     if (want("malformed")) await sMalformed();
     if (want("restart")) await sRestart();
     if (want("retention")) await sRetention();
+    if (want("calibration")) await sCalibration();
   } catch (err) {
     record("ERR", "runner", "-", `stopped: ${err.message}${err.cause ? ` (${err.cause.code || err.cause.message})` : ""}`, false, err.stack);
   } finally {

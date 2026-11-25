@@ -4,13 +4,18 @@
 //
 // What the real node does every second:
 //   1. samples the MAX9814 on GPIO34 at ~4 kHz (analogReadMilliVolts)
-//   2. removes the DC bias (mean) and takes the RMS of what is left (mV)
+//   2. passes each sample through a 150 Hz high-pass filter (removes the DC
+//      bias and highway rumble) and takes the RMS of the result (mV)
 //   3. turns the RMS into dB with CAL_TABLE (linear in 20*log10(mV)),
 //      clamped to DB_FLOOR..DB_CEIL
-//   4. publishes {"db_level": <one decimal>} on enoise/<NODE_ID>/telemetry
-// No A-weighting, no timestamp, no classification.
+//   4. publishes {"db_level": <one decimal>, "fw": "1.1.0"} on enoise/<NODE_ID>/telemetry
+// No A-weighting (only the high-pass), no timestamp, no classification.
 
+export const FIRMWARE_VERSION = "1.1.0";
 export const TELEMETRY_INTERVAL_MS = 1000;
+// First-order high-pass at 150 Hz (firmware 1.1.0, against highway rumble).
+export const HPF_CUTOFF_HZ = 150;
+export const HPF_RC_US = 1e6 / (2 * Math.PI * HPF_CUTOFF_HZ);
 export const LEVEL_SAMPLE_RATE_HZ = 4000; // LEVEL_SAMPLE_INTERVAL_US = 250
 export const LEVEL_MIN_SAMPLES = 2000;
 export const LED_FAILSAFE_MS = 30000;
@@ -68,17 +73,26 @@ export function dbToRms(db) {
 export function measureOneSecond(trueDb, { samples = LEVEL_SAMPLE_RATE_HZ, random = Math.random } = {}) {
   if (samples < LEVEL_MIN_SAMPLES) return null;
   const targetRms = dbToRms(trueDb);
-  // A tone plus a little noise; amplitude chosen so the AC RMS is targetRms.
+  // A 1 kHz tone plus a little noise; amplitude chosen so the AC RMS is
+  // targetRms. (1 kHz: the 150 Hz high-pass filter barely touches it, -0.1 dB.)
   const amplitude = targetRms * Math.SQRT2;
+  const dtUs = 1e6 / samples;
+  const a = HPF_RC_US / (HPF_RC_US + dtUs);
+  let prevIn = null;
+  let prevOut = 0;
   let sum = 0;
   let sumSq = 0;
   for (let n = 0; n < samples; n++) {
-    const tone = amplitude * Math.sin((2 * Math.PI * 440 * n) / samples + random() * 0.05);
+    const tone = amplitude * Math.sin((2 * Math.PI * 1000 * n) / samples + random() * 0.05);
     const noise = (random() - 0.5) * targetRms * 0.1;
     // analogReadMilliVolts returns whole millivolts, 0..3300
     const mv = Math.min(3300, Math.max(0, Math.round(MIC_BIAS_MV + tone + noise)));
-    sum += mv;
-    sumSq += mv * mv;
+    // Port of the firmware's first-order high-pass (sampleLevel()).
+    const out = prevIn === null ? 0 : a * (prevOut + mv - prevIn);
+    prevIn = mv;
+    prevOut = out;
+    sum += out;
+    sumSq += out * out;
   }
   const mean = sum / samples;
   const variance = Math.max(0, sumSq / samples - mean * mean);
@@ -86,9 +100,9 @@ export function measureOneSecond(trueDb, { samples = LEVEL_SAMPLE_RATE_HZ, rando
   return { db: rmsToDb(rmsMv), rmsMv, samples };
 }
 
-/** The telemetry payload exactly as the firmware formats it ("%.1f"). */
+/** The telemetry payload exactly as the firmware formats it ("%.1f" + version). */
 export function telemetryPayload(db) {
-  return `{"db_level":${db.toFixed(1)}}`;
+  return `{"db_level":${db.toFixed(1)},"fw":"${FIRMWARE_VERSION}"}`;
 }
 
 /**

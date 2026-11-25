@@ -34,7 +34,7 @@ Start the local Postgres if it isn't running (this machine's cluster is on port 
 & "C:\Program Files\PostgreSQL\18\bin\pg_ctl.exe" -D ..\..\.pgdata -o "-p 5433" -l ..\..\.pgdata\log.txt start
 ```
 
-## Run every scenario automatically (about 10 minutes)
+## Run every scenario automatically (about 12 minutes)
 
 ```powershell
 node run-scenarios.js
@@ -54,7 +54,7 @@ The table of results goes to `results/latest.md`, and the API's log to
 `results/server.log`. To run only some scenarios, use
 `node run-scenarios.js --only quiet,talking`. Scenario groups: `quiet`, `spike`,
 `talking`, `shout`, `phone`, `false`, `mldown`, `repeat`, `five`, `offline`,
-`malformed`, `restart`, `retention`.
+`malformed`, `restart`, `retention`, `calibration`.
 
 Other settings: `SIM_PG_URL` (default `postgresql://enoise@127.0.0.1:5433`) and `SIM_DB`
 (default `enoise_sim`).
