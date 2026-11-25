@@ -1,6 +1,6 @@
 import * as tablesModel from "../models/tablesModel.js";
 import * as sensorStatusModel from "../models/sensorStatusModel.js";
-import * as noiseReadingsModel from "../models/noiseReadingsModel.js";
+import { addReading } from "./readingWindows.js";
 import { env } from "../config/env.js";
 import { computeLedCounts } from "../utils/ledLogic.js";
 import { decideVerdict, categoryDurationSeconds, LABEL_WAIT_SECONDS } from "../utils/violationRules.js";
@@ -66,7 +66,9 @@ export async function ingestTelemetry(nodeId, { db_level: rawDb, classification,
   // uses the calibrated value.
   const db_level = applyCalibration(rawDb, table);
 
-  await noiseReadingsModel.create({ table_id: table.id, db_level, classification, confidence, recorded_at: timestamp || iso(now) });
+  // Stored as part of the table's 10 s window (readingWindows.js); the
+  // engine below still sees this reading on its own, right now.
+  await addReading(table.id, { db_level, classification, confidence, at: timestamp || now });
   await sensorStatusModel.recordTelemetry(table.id, {
     current_db: db_level,
     raw_db: rawDb,

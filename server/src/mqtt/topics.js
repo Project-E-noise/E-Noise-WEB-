@@ -13,8 +13,8 @@
 //
 // Backend subscribes with single-level wildcards: "enoise/+/telemetry",
 // "enoise/+/status" and "enoise/+/audio". QoS 1 everywhere — readings can't
-// get lost, but a duplicate delivery is harmless (each is just another
-// noise_readings row, or one extra classification call).
+// get lost, but a duplicate delivery is harmless (one extra reading in a
+// 10 s average, or one extra classification call).
 
 import { ML_CATEGORIES } from "../data/constants.js";
 

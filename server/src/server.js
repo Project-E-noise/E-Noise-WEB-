@@ -7,6 +7,7 @@ import { connectMqtt, disconnectMqtt } from "./mqtt/mqttClient.js";
 import { sweepStaleSensors } from "./services/telemetryService.js";
 import { cleanupOldReadings, cleanupPersonalData } from "./services/retentionService.js";
 import { checkMlHealth } from "./services/mlClient.js";
+import { flushReadings, WINDOW_SECONDS } from "./services/readingWindows.js";
 
 // The WebSocket server shares the same HTTP server and port as the REST
 // API (at /ws), so only one port needs to be open.
@@ -54,6 +55,17 @@ async function runSensorSweep() {
 }
 runSensorSweep();
 const sensorSweepTimer = setInterval(runSensorSweep, SENSOR_SWEEP_MS);
+
+// Every 10 s, store the finished 10-second reading windows (one row per
+// table; see services/readingWindows.js).
+async function runReadingsFlush() {
+  try {
+    await flushReadings();
+  } catch (err) {
+    console.warn(`[readings] Flush failed: ${err.message}`);
+  }
+}
+const readingsFlushTimer = setInterval(runReadingsFlush, WINDOW_SECONDS * 1000);
 
 // Every 30 s, ping the ML service. The confirmation engine only waits for a
 // label while it answers, and the dashboard shows an "ML offline" badge.
@@ -105,9 +117,12 @@ async function shutdown(signal) {
   clearInterval(mlHealthTimer);
   clearInterval(violationCleanupTimer);
   clearInterval(readingsCleanupTimer);
+  clearInterval(readingsFlushTimer);
   wss.clients.forEach(socket => socket.close(1001, "server restarting"));
   server.close();
   await disconnectMqtt();
+  // Store the windows that are still open, so no readings are lost on a deploy.
+  await flushReadings({ all: true }).catch(() => {});
   await pool.end().catch(() => {});
   process.exit(0);
 }
