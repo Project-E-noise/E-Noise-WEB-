@@ -12,7 +12,8 @@ const EXPORTS = {
   readings: {
     filename: "noise_readings",
     load: filters => noiseReadingsModel.findForExport(filters),
-    columns: ["id", "table_id", "table_number", "db_level", "classification", "confidence", "recorded_at"]
+    // One row = up to 10 s of readings: db_level is their average, peak_db the loudest.
+    columns: ["id", "table_id", "table_number", "db_level", "peak_db", "samples", "classification", "confidence", "recorded_at"]
   },
   incidents: {
     filename: "incidents",

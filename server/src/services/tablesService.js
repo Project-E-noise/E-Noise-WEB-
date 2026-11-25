@@ -8,7 +8,44 @@ import { TABLE_STATUSES } from "../data/constants.js";
 import { badRequest, conflict, notFound } from "../utils/errors.js";
 import * as check from "../utils/validate.js";
 import { computeLedCounts, computeStatus } from "../utils/ledLogic.js";
+import { categoryDurationSeconds, LABEL_WAIT_SECONDS } from "../utils/violationRules.js";
+import { isMlServiceUp } from "./mlClient.js";
 import { serializeIncident } from "./incidentsService.js";
+import { env } from "../config/env.js";
+
+// 24 h average/peak per table are cached for a minute: they are computed
+// over up to 86,400 rows and were being recomputed on every reading.
+export const STATS_CACHE_MS = 60000;
+const statsCache = new Map(); // table id -> { at, stats }
+
+export function clearStatsCache() {
+  statsCache.clear();
+}
+
+async function cachedStats(tableId) {
+  const hit = statsCache.get(tableId);
+  if (hit && Date.now() - hit.at < STATS_CACHE_MS) return hit.stats;
+  const stats = await noiseReadingsModel.statsForTable(tableId);
+  statsCache.set(tableId, { at: Date.now(), stats });
+  return stats;
+}
+
+// The live streak, for the dashboard's progress bar.
+function monitoringBlock(table, s) {
+  if (!s?.monitoring_since) return null;
+  const labels = Array.isArray(s.streak_labels) ? s.streak_labels : [];
+  return {
+    since: s.monitoring_since,
+    last_loud_at: s.last_loud_at,
+    required_seconds: categoryDurationSeconds(table, labels),
+    label_count: labels.length,
+    // True while the engine holds a sustained streak open for a first label.
+    waiting_for_label: !s.active_incident_id && !labels.length && isMlServiceUp() && table.status !== "PAUSED",
+    label_wait_seconds: LABEL_WAIT_SECONDS,
+    decided: Boolean(s.active_incident_id),
+    peak_db: s.peak_db != null ? Number(s.peak_db) : null
+  };
+}
 
 // Node ids become part of MQTT topic names, so only safe characters are allowed.
 const NODE_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
@@ -24,7 +61,7 @@ async function currentOccupant(tableId) {
 export async function serializeTable(table) {
   const [reading, stats, sensorStatus, occupant, lastIncidentAt] = await Promise.all([
     noiseReadingsModel.latestForTable(table.id),
-    noiseReadingsModel.statsForTable(table.id),
+    cachedStats(table.id),
     sensorStatusModel.findByTableId(table.id),
     currentOccupant(table.id),
     incidentsModel.lastForTable(table.id)
@@ -45,15 +82,27 @@ export async function serializeTable(table) {
     warning_threshold: Number(table.warning_threshold),
     critical_threshold: Number(table.critical_threshold),
     confirmation_seconds: table.confirmation_seconds,
+    calibration_offset_db: Number(table.calibration_offset_db ?? 0),
+    calibration_gain: Number(table.calibration_gain ?? 1),
     // configured_status is the admin setting (AVAILABLE/PAUSED/...);
     // status is the live noise level (SAFE/WARNING/CRITICAL).
     configured_status: table.status,
     status: computeStatus(dbLevel, table),
     // Online = the node said so AND reported recently (sensorStatusModel).
     is_online: sensorStatus?.effective_online ?? false,
-    // A loud streak is being timed but isn't confirmed yet.
-    is_monitoring: Boolean(sensorStatus?.monitoring_since) && !sensorStatus?.led_critical,
-    sensor_status: sensorStatus ? { is_online: sensorStatus.effective_online, last_seen: sensorStatus.last_seen } : null,
+    // A loud streak is being timed but isn't decided yet.
+    is_monitoring: Boolean(sensorStatus?.monitoring_since) && !sensorStatus?.active_incident_id,
+    monitoring: monitoringBlock(table, sensorStatus),
+    cooldown_until: sensorStatus?.cooldown_until && new Date(sensorStatus.cooldown_until) > new Date() ? sensorStatus.cooldown_until : null,
+    sensor_status: sensorStatus
+      ? {
+          is_online: sensorStatus.effective_online,
+          last_seen: sensorStatus.last_seen,
+          // As the node sent it, before calibration (for checking a calibration).
+          raw_db: sensorStatus.raw_db != null ? Number(sensorStatus.raw_db) : null,
+          firmware_version: sensorStatus.firmware_version ?? null
+        }
+      : null,
     current_db: dbLevel,
     avg_db: stats.avg_db,
     peak_db: stats.peak_db,
@@ -90,7 +139,10 @@ function readTableFields(body, current) {
     status: check.oneOf(pick("status"), "Status", TABLE_STATUSES),
     warning_threshold: check.number(pick("warning_threshold"), "Warning threshold", { min: 0, max: 150 }),
     critical_threshold: check.number(pick("critical_threshold"), "Critical threshold", { min: 0, max: 150 }),
-    confirmation_seconds: check.number(pick("confirmation_seconds"), "Confirmation duration", { min: 0, max: 3600, integer: true })
+    confirmation_seconds: check.number(pick("confirmation_seconds"), "Confirmation duration", { min: 0, max: 3600, integer: true }),
+    // Per-node calibration (docs/CALIBRATION.md): corrected = gain x raw + offset.
+    calibration_offset_db: check.number(pick("calibration_offset_db"), "Calibration offset", { min: -40, max: 40 }),
+    calibration_gain: check.number(pick("calibration_gain"), "Calibration gain", { min: 0.5, max: 2 })
   };
   if (fields.warning_threshold >= fields.critical_threshold) throw badRequest("Warning threshold must be less than the critical threshold.");
   return fields;
@@ -110,7 +162,17 @@ export async function getTable(id) {
   return serializeTable(await findOrFail(id));
 }
 
-const NEW_TABLE_DEFAULTS = { description: "", status: "AVAILABLE", warning_threshold: 50, critical_threshold: 60, confirmation_seconds: 10 };
+// Thresholds come from DEFAULT_WARNING_THRESHOLD / DEFAULT_CRITICAL_THRESHOLD
+// (68 / 75 dB, provisional until calibration; see config/thresholdDefaults.js).
+const NEW_TABLE_DEFAULTS = {
+  description: "",
+  status: "AVAILABLE",
+  warning_threshold: env.defaultWarningThreshold,
+  critical_threshold: env.defaultCriticalThreshold,
+  confirmation_seconds: 10,
+  calibration_offset_db: 0,
+  calibration_gain: 1
+};
 
 export async function createTable(body = {}) {
   if (body.table_number === undefined || body.table_number === "") throw badRequest("Table number is required.");

@@ -63,30 +63,37 @@ const OCCUPANTS = [
 // Who sits where right now (table number). Juan is banned, so he has no seat.
 const CURRENT_SEATS = { maria: 2, pedro: 3, ana: 4, carmen: 5, miguel: 1 };
 
-// Incident history: [occupant key or null, table number, category, dB, hours ago, status]
+// Incident history: [occupant key or null, table number, category, dB, hours ago, status, YAMNet top class, filter reason]
+// Only Loud Conversation, Mobile Phone Noise and Music are violations; other
+// loud sounds are IGNORED / UNVERIFIED (Incident Logs -> Filtered), never strikes.
+// At most one strike per occupant per day, like the app (MAX_STRIKES_PER_DAY=1).
 const INCIDENTS = [
-  // Pedro: 3 strikes 10 days ago -> banned, ban already ended. 1 new strike yesterday.
-  ["pedro", 3, "Loud Conversation", 63.2, 10 * 24 + 6, "CONFIRMED"],
-  ["pedro", 3, "Mobile Phone Noise", 61.4, 10 * 24 + 4, "CONFIRMED"],
-  ["pedro", 3, "Loud Conversation", 64.8, 10 * 24 + 2, "CONFIRMED"],
-  ["pedro", 3, "Impact Noise", 66.1, 26, "CONFIRMED"],
+  // Pedro: 3 strikes on 3 days, about 10 days ago -> banned, ban already ended. 1 new strike yesterday.
+  ["pedro", 3, "Loud Conversation", 63.2, 12 * 24 + 6, "CONFIRMED", "Speech"],
+  ["pedro", 3, "Mobile Phone Noise", 61.4, 11 * 24 + 4, "CONFIRMED", "Ringtone"],
+  ["pedro", 3, "Loud Conversation", 64.8, 10 * 24 + 2, "CONFIRMED", "Shout"],
+  ["pedro", 3, "Music", 66.1, 26, "CONFIRMED", "Pop music"],
   // Juan: 3 strikes in the last few days -> currently banned.
-  ["juan", 6, "Loud Conversation", 62.5, 4 * 24 + 3, "CONFIRMED"],
-  ["juan", 6, "Loud Conversation", 65.0, 3 * 24 + 5, "CONFIRMED"],
-  ["juan", 6, "Mobile Phone Noise", 60.9, 2 * 24 + 1, "CONFIRMED"],
+  ["juan", 6, "Loud Conversation", 62.5, 4 * 24 + 3, "CONFIRMED", "Conversation"],
+  ["juan", 6, "Loud Conversation", 65.0, 3 * 24 + 5, "CONFIRMED", "Laughter"],
+  ["juan", 6, "Mobile Phone Noise", 60.9, 2 * 24 + 1, "CONFIRMED", "Telephone bell ringing"],
   // Maria (client account): 2 strikes, one dismissed incident.
-  ["maria", 2, "Mobile Phone Noise", 61.7, 5 * 24 + 2, "CONFIRMED"],
-  ["maria", 2, "Impact Noise", 59.1, 3 * 24, "DISMISSED"],
-  ["maria", 2, "Loud Conversation", 62.3, 20, "CONFIRMED"],
+  ["maria", 2, "Mobile Phone Noise", 61.7, 5 * 24 + 2, "CONFIRMED", "Ringtone"],
+  ["maria", 2, "Loud Conversation", 59.1, 3 * 24, "DISMISSED", "Speech"],
+  ["maria", 2, "Loud Conversation", 62.3, 20, "CONFIRMED", "Conversation"],
   // Others.
-  ["ana", 4, "Impact Noise", 63.9, 6 * 24 + 7, "CONFIRMED"],
-  ["carmen", 5, "Loud Conversation", 58.6, 2 * 24 + 9, "CONFIRMED"],
-  ["miguel", 1, "Mobile Phone Noise", 61.0, 9, "CONFIRMED"],
+  ["ana", 4, "Impact Noise", 63.9, 6 * 24 + 7, "IGNORED", "Slam", "non_violation_category"],
+  ["carmen", 5, "Loud Conversation", 58.6, 2 * 24 + 9, "CONFIRMED", "Chatter"],
+  ["carmen", 5, "Impact Noise", 64.0, 30, "IGNORED", "Scrape", "non_violation_category"],
+  ["miguel", 1, "Mobile Phone Noise", 61.0, 9, "CONFIRMED", "Ringtone"],
+  ["miguel", 1, null, 62.4, 5, "UNVERIFIED", "Speech", "low_confidence"],
   // Nobody assigned at the time.
-  [null, 1, "Impact Noise", 67.4, 5 * 24 + 8, "CONFIRMED"],
-  [null, 4, "Loud Conversation", 60.2, 4 * 24 + 6, "CONFIRMED"],
-  [null, 5, "Ambient Baseline", 58.1, 30, "DISMISSED"],
-  [null, 2, "Loud Conversation", 61.8, 3, "CONFIRMED"]
+  [null, 1, "Impact Noise", 67.4, 5 * 24 + 8, "IGNORED", "Door", "non_violation_category"],
+  [null, 4, "Loud Conversation", 60.2, 4 * 24 + 6, "CONFIRMED", "Crowd"],
+  [null, 5, "Ambient Baseline", 58.1, 30, "DISMISSED", "Air conditioning"],
+  [null, 3, null, 66.0, 7, "UNVERIFIED", null, "no_classification"],
+  [null, 7, "Music", 63.5, 6, "IGNORED", "Guitar", "table_paused"],
+  [null, 2, "Loud Conversation", 61.8, 3, "CONFIRMED", "Yell"]
 ];
 
 /** Typical dB level for a table at a given moment (busy afternoons, quiet nights). */
@@ -208,14 +215,19 @@ async function insertHistory(client, tableIds, occupantIds) {
   const strikes = {};
   const numbers = {};
   const sorted = [...INCIDENTS].sort((a, b) => b[4] - a[4]);
-  for (const [key, tableNumber, category, db, hoursAgo, status] of sorted) {
+  for (const [key, tableNumber, category, db, hoursAgo, status, topClass = null, filterReason = null] of sorted) {
     const occurredAt = ago(hoursAgo * HOUR);
     const occupantId = key ? occupantIds[key] : null;
+    // No label at all -> no confidence; a low-confidence label -> under 0.5.
+    const confidence = filterReason === "no_classification" ? null
+      : filterReason === "low_confidence" ? round1(0.2 + random() * 0.2)
+        : round1(0.65 + random() * 0.3);
     const { rows } = await client.query(
-      `INSERT INTO incidents (table_id, occupant_id, category, db_level, confidence, duration_seconds, bulb_triggered, status, notes, occurred_at, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8, $9, $9) RETURNING id`,
-      [tableIds[tableNumber], occupantId, category, db, round1(0.65 + random() * 0.3), 10 + Math.floor(random() * 25), status,
-        status === "DISMISSED" ? "Reviewed: not a real violation." : "", occurredAt]
+      `INSERT INTO incidents (table_id, occupant_id, category, db_level, peak_db, confidence, duration_seconds, bulb_triggered, status, notes,
+                              occurred_at, created_at, top_class, filter_reason)
+       VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, $9, $10, $10, $11, $12) RETURNING id`,
+      [tableIds[tableNumber], occupantId, category, db, confidence, 10 + Math.floor(random() * 25), status === "CONFIRMED", status,
+        status === "DISMISSED" ? "Reviewed: not a real violation." : "", occurredAt, topClass, filterReason]
     );
     if (!occupantId || status !== "CONFIRMED") continue;
 

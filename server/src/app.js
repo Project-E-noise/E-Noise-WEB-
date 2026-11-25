@@ -5,6 +5,8 @@ import morgan from "morgan";
 import { env } from "./config/env.js";
 import apiRoutes from "./routes/index.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
+import { healthDbLimiter } from "./middleware/rateLimits.js";
+import { query } from "./config/db.js";
 
 export const app = express();
 
@@ -48,6 +50,27 @@ if (env.nodeEnv !== "test") {
 // Used by the keep-alive pinger. It does not touch the database, so Neon
 // can still go to sleep when nobody is using the app.
 app.get("/health", (req, res) => res.json({ status: "ok" }));
+
+// Checks that the database answers (for the smoke test and manual checks).
+// Keep the pinger and Render's health check on /health above: pinging this
+// one would keep Neon awake 24/7. Answers only ok/error, never details.
+const DB_CHECK_TIMEOUT_MS = 3000;
+app.get("/health/db", healthDbLimiter, async (req, res) => {
+  let timer;
+  try {
+    await Promise.race([
+      query("SELECT 1"),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timeout")), DB_CHECK_TIMEOUT_MS);
+      })
+    ]);
+    res.json({ status: "ok" });
+  } catch {
+    res.status(503).json({ status: "error" });
+  } finally {
+    clearTimeout(timer);
+  }
+});
 
 app.use("/api", apiRoutes);
 

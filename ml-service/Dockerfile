@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 # Download YAMNet while building, so the Space starts faster after sleeping.
 RUN python -c "import tensorflow_hub as hub; hub.load('https://tfhub.dev/google/yamnet/1')"
 
-COPY --chown=user app.py category_mapping.py ./
+COPY --chown=user app.py category_mapping.py model_cache.py ./
 
 EXPOSE 7860
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]

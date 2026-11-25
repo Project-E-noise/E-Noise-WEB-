@@ -84,7 +84,8 @@ export async function logs(id, { from, to, limit, offset }) {
        FROM table_assignments a JOIN tables t ON t.id=a.table_id WHERE a.occupant_id=$1
        UNION ALL
        SELECT 'incident', i.occurred_at, t.table_number::text, i.category, i.db_level, i.status
-       FROM incidents i JOIN tables t ON t.id=i.table_id WHERE i.occupant_id=$1
+       FROM incidents i JOIN tables t ON t.id=i.table_id
+       WHERE i.occupant_id=$1 AND i.status NOT IN ('IGNORED', 'UNVERIFIED')
      ) activity
      WHERE ($2::timestamptz IS NULL OR occurred_at >= $2) AND ($3::timestamptz IS NULL OR occurred_at < $3)
      ORDER BY occurred_at DESC LIMIT $4 OFFSET $5`,
@@ -97,7 +98,7 @@ export async function logCount(id, { from, to }) {
   const { rows } = await query(
     `SELECT COUNT(*)::int AS count FROM (
        SELECT assigned_at AS occurred_at FROM table_assignments WHERE occupant_id=$1
-       UNION ALL SELECT occurred_at FROM incidents WHERE occupant_id=$1
+       UNION ALL SELECT occurred_at FROM incidents WHERE occupant_id=$1 AND status NOT IN ('IGNORED', 'UNVERIFIED')
      ) activity WHERE ($2::timestamptz IS NULL OR occurred_at >= $2)
        AND ($3::timestamptz IS NULL OR occurred_at < $3)`,
     [id, from, to]

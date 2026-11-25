@@ -5,7 +5,7 @@ import { ConfirmDialog } from "../components/common/Modal";
 import { AsyncSection } from "../components/common/UiStates";
 import { useTables } from "../hooks/useTables";
 import { tablesApi } from "../services/tables";
-import { duplicateTableIssue, sensorNodeIssue, tableNumberIssue } from "../utils/validation";
+import { calibrationIssue, duplicateTableIssue, sensorNodeIssue, tableNumberIssue } from "../utils/validation";
 import { TABLE_STATUSES } from "../constants";
 import { useToast } from "../context/ToastContext";
 
@@ -30,7 +30,9 @@ function TableEditor({ table, tables, onSaved, onDelete }) {
     table_number: String(table.table_number),
     sensor_node_id: table.sensor_node_id,
     description: table.description || "",
-    status: table.configured_status
+    status: table.configured_status,
+    calibration_offset_db: String(table.calibration_offset_db ?? 0),
+    calibration_gain: String(table.calibration_gain ?? 1)
   });
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
@@ -39,12 +41,18 @@ function TableEditor({ table, tables, onSaved, onDelete }) {
 
   const save = async e => {
     e.preventDefault();
-    const found = checkTable(tables, form, table.id);
+    const found = { ...checkTable(tables, form, table.id), ...calibrationIssue(form.calibration_offset_db, form.calibration_gain) };
     setErrors(found);
     if (Object.keys(found).length) return;
     setSaving(true);
     try {
-      await tablesApi.update(table.id, { ...form, table_number: Number(form.table_number), sensor_node_id: form.sensor_node_id.trim() });
+      await tablesApi.update(table.id, {
+        ...form,
+        table_number: Number(form.table_number),
+        sensor_node_id: form.sensor_node_id.trim(),
+        calibration_offset_db: Number(form.calibration_offset_db),
+        calibration_gain: Number(form.calibration_gain)
+      });
       showToast("Table updated");
       onSaved();
     } catch (err) {
@@ -66,6 +74,12 @@ function TableEditor({ table, tables, onSaved, onDelete }) {
       </div>
       <Input label="Description" value={form.description} onChange={update("description")} error={errors.description} maxLength={500} />
       <Select label="Status" value={form.status} onChange={update("status")} options={TABLE_STATUSES} />
+      <div className="form-row">
+        <Input label="Calibration offset (dB)" type="number" step="0.01" value={form.calibration_offset_db} onChange={update("calibration_offset_db")} error={errors.calibration_offset_db}
+          hint="From tools/calibration (docs/CALIBRATION.md). 0 = not calibrated." />
+        <Input label="Calibration gain" type="number" step="0.001" value={form.calibration_gain} onChange={update("calibration_gain")} error={errors.calibration_gain}
+          hint="1 unless the calibration asked for gain + offset." />
+      </div>
       <div className="form-actions">
         <button type="button" className="btn btn-danger" onClick={() => onDelete(table)}><i className="ti ti-trash" /> Delete</button>
         <button className="btn btn-primary" disabled={saving}><i className="ti ti-device-floppy" /> {saving ? "Saving..." : "Save"}</button>

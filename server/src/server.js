@@ -4,8 +4,10 @@ import { env } from "./config/env.js";
 import { pool } from "./config/db.js";
 import { createWsServer } from "./realtime/wsServer.js";
 import { connectMqtt, disconnectMqtt } from "./mqtt/mqttClient.js";
-import { sweepStaleSensors } from "./services/telemetryService.js";
+import { sweepStaleSensors, sweepNeeded, noteSweepDone } from "./services/telemetryService.js";
 import { cleanupOldReadings, cleanupPersonalData } from "./services/retentionService.js";
+import { checkMlHealth } from "./services/mlClient.js";
+import { flushReadings, WINDOW_SECONDS } from "./services/readingWindows.js";
 
 // The WebSocket server shares the same HTTP server and port as the REST
 // API (at /ws), so only one port needs to be open.
@@ -15,17 +17,41 @@ const wss = createWsServer(server);
 server.listen(env.port, () => {
   console.log(`[server] Project E-Noise API (${env.nodeEnv}) listening on port ${env.port}`);
   console.log(`[server] WebSocket at /ws. Allowed origins: ${env.corsOrigins.join(", ")}`);
+  logOptionalFeatures();
 });
+
+// One line per optional feature that is off or misconfigured, so the Render
+// log says right away why loud events are UNVERIFIED or emails don't arrive.
+// (MQTT logs its own line in connectMqtt.)
+function logOptionalFeatures() {
+  if (!env.mlServiceUrl) {
+    console.warn("[ml] ML_SERVICE_URL is not set: classification is off, so every sustained loud event is logged as UNVERIFIED (no strikes).");
+  } else {
+    console.log(`[ml] Classifier at ${new URL(env.mlServiceUrl).host}${env.mlApiKey ? " (with API key)" : " (no API key)"}.`);
+  }
+  const provider = env.email.provider || (env.smtp.host ? "smtp" : "");
+  if (provider === "brevo" && !env.email.brevoApiKey) {
+    console.warn("[email] EMAIL_PROVIDER=brevo but BREVO_API_KEY is empty: verification and set-password emails will FAIL. Set the key, or use `npm run admin:create` for the first admin.");
+  } else if (!provider) {
+    console.warn("[email] EMAIL_PROVIDER is not set: emails are not sent; verification links are printed in this log instead.");
+  } else {
+    console.log(`[email] Sending email with ${provider}.`);
+  }
+}
 
 // Starts MQTT ingestion from the sensor nodes (or skips it with a warning).
 connectMqtt();
 
 // Every 15 s, mark sensors that went silent as offline. A database outage
-// only logs a warning; the next run tries again.
+// only logs a warning; the next run tries again. Skipped while no node has
+// sent anything (sweepNeeded), so Neon can sleep when the nodes are off.
 const SENSOR_SWEEP_MS = 15000;
 async function runSensorSweep() {
+  if (!sweepNeeded()) return;
+  const startedAt = Date.now();
   try {
     const changed = await sweepStaleSensors();
+    noteSweepDone(startedAt);
     if (changed.length) console.log(`[sensors] Marked ${changed.length} silent sensor(s) offline.`);
   } catch (err) {
     console.warn(`[sensors] Offline sweep failed: ${err.message || err.code || "database unreachable"}`);
@@ -33,6 +59,23 @@ async function runSensorSweep() {
 }
 runSensorSweep();
 const sensorSweepTimer = setInterval(runSensorSweep, SENSOR_SWEEP_MS);
+
+// Every 10 s, store the finished 10-second reading windows (one row per
+// table; see services/readingWindows.js).
+async function runReadingsFlush() {
+  try {
+    await flushReadings();
+  } catch (err) {
+    console.warn(`[readings] Flush failed: ${err.message}`);
+  }
+}
+const readingsFlushTimer = setInterval(runReadingsFlush, WINDOW_SECONDS * 1000);
+
+// Every 30 s, ping the ML service. The confirmation engine only waits for a
+// label while it answers, and the dashboard shows an "ML offline" badge.
+const ML_HEALTH_MS = 30000;
+checkMlHealth();
+const mlHealthTimer = setInterval(checkMlHealth, ML_HEALTH_MS);
 
 // Once at startup, then every 24 h: delete violations older than
 // VIOLATION_RETENTION_DAYS, remove the occupant from incidents that old, and
@@ -52,9 +95,10 @@ async function runViolationCleanup() {
 runViolationCleanup();
 const violationCleanupTimer = setInterval(runViolationCleanup, VIOLATION_CLEANUP_MS);
 
-// Once at startup, then every hour: delete raw noise readings older than
-// NOISE_READINGS_RETENTION_DAYS (in batches). Errors only log a warning.
-const READINGS_CLEANUP_MS = 60 * 60 * 1000;
+// Once at startup, then every 24 h: delete raw noise readings older than
+// NOISE_READINGS_RETENTION_DAYS (in batches). Daily, not hourly, so it
+// doesn't wake a sleeping Neon every hour. Errors only log a warning.
+const READINGS_CLEANUP_MS = 24 * 60 * 60 * 1000;
 async function runReadingsCleanup() {
   try {
     const deleted = await cleanupOldReadings();
@@ -75,11 +119,15 @@ async function shutdown(signal) {
   console.log(`[server] ${signal} received, shutting down...`);
   setTimeout(() => process.exit(0), 5000).unref();
   clearInterval(sensorSweepTimer);
+  clearInterval(mlHealthTimer);
   clearInterval(violationCleanupTimer);
   clearInterval(readingsCleanupTimer);
+  clearInterval(readingsFlushTimer);
   wss.clients.forEach(socket => socket.close(1001, "server restarting"));
   server.close();
   await disconnectMqtt();
+  // Store the windows that are still open, so no readings are lost on a deploy.
+  await flushReadings({ all: true }).catch(() => {});
   await pool.end().catch(() => {});
   process.exit(0);
 }

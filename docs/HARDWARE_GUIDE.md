@@ -127,7 +127,7 @@ Read the tiny labels on your module itself; do not wire by position alone. The m
 | GAIN | Leave floating: reported 60 dB setting |
 | A/R | Leave floating unless module documentation for this exact board says otherwise; the reported default is 1:4000 |
 
-The reported gain options are floating=60 dB, GAIN to GND=50 dB, and GAIN to VDD=40 dB. The firmware comments/calibration assume the floating 60 dB choice. Lower gain usually makes both telemetry swings and audio samples smaller; AGC makes the difference non-constant, so changing gain can shift dB readings and affect audio classification. Exact breakout behavior is **unverified: confirm on the bench**.
+The reported gain options are floating=60 dB, GAIN to GND=50 dB, and GAIN to VDD=40 dB. With AGC switched off (TH to MICBIAS, see Calibration), use GAIN to VDD (40 dB) so 80-90 dB talking does not clip, and calibrate after any gain change. Lower gain usually makes both telemetry swings and audio samples smaller; AGC makes the difference non-constant, so changing gain can shift dB readings and affect audio classification. Exact breakout behavior is **unverified: confirm on the bench**.
 
 ## Power and resistor math
 
@@ -251,7 +251,7 @@ Pass: exactly the expected color row lights and the critical LED blinks. Fail: u
 
 ## Raw-mic diagnostic sketch
 
-Upload this standalone sketch for test (c) and calibration. Open Serial Monitor at 115200 baud. It reads GPIO34 in 50 ms windows and prints the minimum, maximum, and peak-to-peak ADC counts; reports are paced to about 250 ms apart.
+Upload this standalone sketch for test (c) (wiring check only; calibration uses the normal firmware's `[level]` lines, see Calibration). Open Serial Monitor at 115200 baud. It reads GPIO34 in 50 ms windows and prints the minimum, maximum, and peak-to-peak ADC counts; reports are paced to about 250 ms apart.
 
 ```cpp
 const int MIC_PIN = 34;
@@ -329,20 +329,29 @@ Perform tests in order. Serial output wording can vary slightly with current fir
 | j | Unplug / Last Will | With node powered and connected, remove power without a graceful disconnect; backend/dashboard should mark it offline through the will. |
 | k | 30-second LED failsafe | Keep node powered and online; stop the backend server so it sends no LED commands. Watch the LEDs go dark after about 30 seconds. Restart backend; next telemetry is handled and LED state is published again, so watch them recover. The backend publishes on every accepted telemetry reading (`server/src/services/telemetryService.js:51–53`) and retained QoS 1 (`server/src/mqtt/mqttClient.js:96–99`). |
 
-For dashboard-only simulation, use the exact script commands from `server/`: `npm run simulate -- --node SIM-ONLY` for a gentle walk or `npm run simulate -- --node SIM-ONLY --spike` for a spike (flags `--node <id>` and `--spike`; `server/scripts/simulate-device.js:10–14`). Use an ID/table reserved for simulation and with no real device publishing, or power off the real node first. The script publishes retained QoS 1 online status, then QoS 1 telemetry every second with `db_level`, `classification`, `confidence`, and `timestamp`; Ctrl+C publishes retained offline status (`simulate-device.js:47, 59–72`). Do not use its telemetry to test the real node's LEDs.
+For dashboard-only simulation, use the virtual node in `tools/simulator/` (see its README), e.g. `node virtual-node.js --node SIM-ONLY --scenario talking`. It publishes exactly what the firmware publishes (`{"db_level":...}` once a second, retained status with a Last Will, WAV clips on request). Use an ID/table reserved for simulation and with no real device publishing, or power off the real node first: two publishers with the same node ID would mix their readings.
 
 ## Calibration
 
-The firmware's dB estimate is a rough peak-to-peak proxy, not a calibrated sound meter. Use a phone SPL app as a rough reference or, preferably, an SPL meter. Use the raw-mic diagnostic sketch above during calibration and keep the mic and reference device side by side in a quiet, stable setup.
+**Follow [docs/CALIBRATION.md](CALIBRATION.md).** In short:
 
-1. Set the phone app or SPL meter to the weighting and response mode you will use consistently. Play a steady tone at a safe, stable volume near the mic.
-2. In Serial Monitor, read several `min=... max=... pp=...` lines. Record the representative `pp` count while the sound is steady; do not use a single transient maximum.
-3. Convert the recorded p-p counts to volts: `p-p volts = pp counts × 3.3 / 4095`. For example, if the observed count is `P`, enter the computed numeric voltage `P * 3.3 / 4095` as `MIC_REF_VOLTAGE` in the firmware (in volts, for example `0.023f`; replace that example with your calculated value).
-4. At the same time and sound position, read the reference meter's displayed dB(A) value. Enter that numeric value as `MIC_REF_DB` (for example, if it reads 54.2 dB(A), set `MIC_REF_DB = 54.2f`).
-5. Reflash with those two values, repeat the same sound/reference measurement, and compare the firmware telemetry with the reference at that point. Adjust the reference pair if needed, then check additional sound levels; one-point matching does not guarantee accuracy across a range.
-6. Repeat calibration after changing mic gain, module, enclosure, placement, or firmware, and before relying on study results.
+- **Firmware 1.1.0 first.** Its 150 Hz high-pass filter changes the readings,
+  so calibrate only after flashing it.
+- **Switch the MAX9814's AGC off.** The firmware can't. Per the datasheet,
+  connect **TH to MICBIAS**. If your breakout doesn't expose TH, use a
+  microphone without AGC (MAX4466, or an INMP441 over I2S). With AGC off, set
+  **GAIN to VDD (40 dB)** so loud talking doesn't clip, and confirm on the bench
+  that a sound 10 dB louder reads about 10 dB higher.
+- **Calibration mode:** type `cal` + Enter in the Serial Monitor (115200 baud).
+  The node prints `[cal] node=... fw=1.1.0 raw_db=... rms_mv=...` once per second
+  and publishes no telemetry.
+- **Per-node correction:** compare with a reference meter at 50 / 65 / 80 dB(A)
+  (1 kHz tone), compute the offset (or gain + offset) with
+  `tools/calibration/compute-offset.js`, and enter it in Table Configuration.
+  `CAL_TABLE` in the firmware stays the shared base curve (placeholder rows); the
+  dashboard correction is applied on top.
 
-The MAX9814 has automatic gain control, while firmware uses a 50 ms peak-to-peak window, so this is not calibrated SPL and may not track transient or sustained sound like a certified meter. Phone app accuracy and your module's response are **unverified: confirm on the bench**.
+Phone app accuracy and your module's response are **unverified: confirm on the bench**.
 
 ## Mounting and placement
 

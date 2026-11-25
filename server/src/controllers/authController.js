@@ -1,5 +1,6 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
 import * as authService from "../services/authService.js";
+import * as adminsModel from "../models/adminsModel.js";
 
 export const register = asyncHandler(async (req, res) => {
   res.status(201).json(await authService.register(req.body));
@@ -21,9 +22,10 @@ export const changePassword = asyncHandler(async (req, res) => {
   res.json(await authService.changeAdminPassword(req.admin.id, req.body));
 });
 
-// JWTs are stateless: the browser deletes its token. A copied token stays
-// valid until it expires (see JWT_EXPIRES_IN).
+// Logging out bumps the admin's token_version, so this token (and any
+// other token of this admin, e.g. on another device) stops working now.
 export const logout = asyncHandler(async (req, res) => {
+  await adminsModel.bumpTokenVersion(req.admin.id);
   res.json({ message: "Logged out." });
 });
 

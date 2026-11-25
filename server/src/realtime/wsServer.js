@@ -1,7 +1,7 @@
 import { WebSocketServer } from "ws";
 import { verifyAdminToken } from "../utils/verifyAdminToken.js";
 
-// Phase 6: push-based real-time delivery. Mounted on the same HTTP
+// Push-based real-time delivery. Mounted on the same HTTP
 // server/port as the REST API (path "/ws") — no separate port, so it works
 // wherever the API is already reachable/proxied.
 //

@@ -1,0 +1,23 @@
+{
+  "name": "enoise-simulator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Virtual E-Noise sensor nodes, a local MQTT broker and a mock ML service, for testing the whole chain without hardware or cloud accounts.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "broker": "node broker.js",
+    "mock-ml": "node mock-ml.js",
+    "node": "node virtual-node.js",
+    "watch": "node ws-watch.js",
+    "scenarios": "node run-scenarios.js"
+  },
+  "dependencies": {
+    "aedes": "1.2.0",
+    "mqtt": "5.16.0",
+    "pg": "8.23.0",
+    "ws": "8.21.3"
+  }
+}

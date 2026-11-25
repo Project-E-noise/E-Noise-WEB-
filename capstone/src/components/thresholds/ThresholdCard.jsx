@@ -35,8 +35,8 @@ export function ThresholdCard({ table, onSave }) {
         <span className="badge badge-neu mono">{table.sensor_node_id}</span>
       </div>
       <Slider label="Warning threshold (yellow LEDs)" min={30} max={100} value={draft.warning_threshold} onChange={update("warning_threshold")} hint="Must be lower than the critical threshold." />
-      <Slider label="Critical threshold (red LEDs + bulb)" min={30} max={110} value={draft.critical_threshold} onChange={update("critical_threshold")} />
-      <Slider label="Confirmation time" min={0} max={30} unit="sec" value={draft.confirmation_seconds} onChange={update("confirmation_seconds")} hint="How long the noise must stay critical before it becomes a confirmed incident." />
+      <Slider label="Critical threshold (red LEDs, starts the violation check)" min={30} max={110} value={draft.critical_threshold} onChange={update("critical_threshold")} />
+      <Slider label="Confirmation time" min={0} max={30} unit="sec" value={draft.confirmation_seconds} onChange={update("confirmation_seconds")} hint="How long the noise must stay at or above the critical threshold before the sound is checked. Only a violation sound then lights the critical bulb." />
       <Select label="Table status" value={draft.status} onChange={update("status")} options={TABLE_STATUSES} />
       {(error || issue) && <div className="form-error" role="alert">{error || issue}</div>}
       <button type="button" className="btn btn-primary btn-block" onClick={save} disabled={saving || Boolean(issue)}>

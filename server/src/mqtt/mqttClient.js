@@ -12,7 +12,7 @@ import {
   audioRequestTopic,
   buildAudioRequestPayload
 } from "./topics.js";
-import { ingestTelemetry, ingestStatus, ingestAudioClip } from "../services/telemetryService.js";
+import { ingestTelemetry, ingestStatus, ingestAudioClip, noteNodeMessage } from "../services/telemetryService.js";
 
 let client = null;
 
@@ -22,7 +22,7 @@ let client = null;
 const nodeQueues = new Map();
 function runInOrder(nodeId, task) {
   const previous = nodeQueues.get(nodeId) || Promise.resolve();
-  const next = previous.then(task).catch(err => console.error(`[mqtt] Failed to process message from ${nodeId}:`, err.message));
+  const next = previous.then(task).then(() => noteNodeMessage()).catch(err => console.error(`[mqtt] Failed to process message from ${nodeId}:`, err.message));
   nodeQueues.set(nodeId, next);
   next.finally(() => {
     if (nodeQueues.get(nodeId) === next) nodeQueues.delete(nodeId);
@@ -38,7 +38,6 @@ function runInOrder(nodeId, task) {
  */
 export function connectMqtt() {
   if (!env.hivemq.host) {
-    // eslint-disable-next-line no-console
     console.warn("[mqtt] HIVEMQ_HOST is not set — skipping MQTT connection. Set it in server/.env once hardware is available.");
     return null;
   }
@@ -58,11 +57,9 @@ export function connectMqtt() {
   });
 
   client.on("connect", () => {
-    // eslint-disable-next-line no-console
     console.log(`[mqtt] Connected to ${env.hivemq.host}:${env.hivemq.port}`);
     client.subscribe([TELEMETRY_SUBSCRIBE_FILTER, STATUS_SUBSCRIBE_FILTER, AUDIO_SUBSCRIBE_FILTER], { qos: 1 }, err => {
       if (err) console.error("[mqtt] Subscribe failed:", err.message);
-      // eslint-disable-next-line no-console
       else console.log(`[mqtt] Subscribed: ${TELEMETRY_SUBSCRIBE_FILTER}, ${STATUS_SUBSCRIBE_FILTER}, ${AUDIO_SUBSCRIBE_FILTER}`);
     });
   });
@@ -74,11 +71,16 @@ export function connectMqtt() {
   client.on("message", (topic, payload, packet) => {
     const nodeId = nodeIdFromTopic(topic);
     if (!nodeId) return;
+    // The time the message ARRIVED. Messages of one node are processed one
+    // after another, so when the database is slow a reading may be handled a
+    // little later; the loud-streak timer must still use the real time.
+    const receivedAt = new Date();
+    noteNodeMessage(receivedAt);
 
     if (topic.endsWith("/telemetry")) {
       const parsed = parseTelemetry(payload);
       if (parsed.error) return console.warn(`[mqtt] Bad telemetry from ${nodeId}: ${parsed.error}`);
-      runInOrder(nodeId, () => ingestTelemetry(nodeId, parsed));
+      runInOrder(nodeId, () => ingestTelemetry(nodeId, parsed, { now: receivedAt }));
     } else if (topic.endsWith("/status")) {
       const parsed = parseStatus(payload);
       if (parsed.error) return console.warn(`[mqtt] Bad status from ${nodeId}: ${parsed.error}`);
@@ -89,7 +91,7 @@ export function connectMqtt() {
       // Binary WAV clip. Classification can take seconds (or the ML
       // service may be asleep), so it does not hold up the telemetry queue.
       // The buffer only lives in memory; it is never written to disk.
-      ingestAudioClip(nodeId, payload).catch(err => console.error(`[mqtt] Audio from ${nodeId} failed:`, err.message));
+      ingestAudioClip(nodeId, payload, { now: receivedAt }).catch(err => console.error(`[mqtt] Audio from ${nodeId} failed:`, err.message));
     }
   });
 
@@ -113,7 +115,7 @@ export function publishLedState(nodeId, ledState) {
 }
 
 /**
- * Asks a device to capture and publish one audio clip now (Phase 7). Not
+ * Asks a device to capture and publish one audio clip now. Not
  * retained — it's a one-off instruction, not standing state. Silently
  * no-ops if MQTT isn't connected, same as publishLedState.
  */

@@ -5,7 +5,6 @@
 // a separate, empty database whose name contains "test", e.g.
 //   TEST_DATABASE_URL=postgresql://user:password@localhost:5432/enoise_test
 import dotenv from "dotenv";
-import pg from "pg";
 import bcrypt from "bcryptjs";
 
 dotenv.config();

@@ -5,7 +5,6 @@ import { pgConfig } from "./dbConfig.js";
 const { Pool } = pg;
 
 if (!env.databaseUrl) {
-  // eslint-disable-next-line no-console
   console.warn(
     "[db] DATABASE_URL is not set. Set it in server/.env, e.g.\n" +
       "     DATABASE_URL=postgresql://user:password@localhost:5432/enoise\n" +
@@ -17,18 +16,28 @@ export const pool = new Pool({
   ...pgConfig(env.databaseUrl, env.nodeEnv),
   // Small pool: one study hub, a handful of admins. Neon free also limits connections.
   max: 10,
-  idleTimeoutMillis: 30000
+  idleTimeoutMillis: 30000,
+  // Give up on a new connection after 10 s instead of waiting for the
+  // operating system's TCP timeout. A sleeping Neon database wakes in ~1-5 s.
+  connectionTimeoutMillis: 10000
 });
 
 pool.on("error", err => {
   // Errors on idle clients (e.g. dropped connections) must not crash the process.
-  // eslint-disable-next-line no-console
   console.error("[db] Unexpected error on idle client:", err.message);
 });
 
 /** Run a single parameterized query against the pool. */
 export function query(text, params) {
   return pool.query(text, params);
+}
+
+/**
+ * For model functions that take an optional `client`: inside a transaction
+ * (withTransaction) they must use that client, otherwise the pool.
+ */
+export function runnerFor(client) {
+  return client || { query };
 }
 
 /**

@@ -2,10 +2,14 @@
 // rule, all inside one transaction.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { env } from "../src/config/env.js";
 import { api, resetDatabase, closeDatabase, createAdmin, createTable, createOccupant, assign, bearer, query } from "./helpers.js";
 
 let auth;
 before(async () => {
+  // These tests are about the ban rule itself; the daily strike cap has
+  // its own tests in strikes.test.js.
+  env.maxStrikesPerDay = 100;
   await resetDatabase();
   auth = bearer((await createAdmin()).token);
 });
@@ -157,4 +161,24 @@ test("incidents at the same moment still give exactly one ban (row lock)", async
   assert.deepEqual(numbers, numbers.map((_, i) => i + 1), "no duplicate or skipped violation numbers");
   const bans = await query("SELECT ban_started_at FROM occupants WHERE id = $1", [o.id]);
   assert.ok(bans.rows[0].ban_started_at);
+});
+
+test("category is required only for CONFIRMED; top_class, filter_reason and peak_db are accepted", async () => {
+  const table = await createTable();
+  const missing = await api().post("/api/incidents").set(auth).send({ table_id: table.id, db_level: 65 });
+  assert.equal(missing.status, 400);
+  assert.match(missing.body.error, /category for a confirmed incident/);
+
+  const filtered = await api().post("/api/incidents").set(auth).send({
+    table_id: table.id, db_level: 70, status: "UNVERIFIED", filter_reason: "low_confidence", top_class: "Typing", peak_db: 74.5
+  });
+  assert.equal(filtered.status, 201, filtered.body.error);
+  assert.equal(filtered.body.incident.category, null);
+  assert.equal(filtered.body.incident.filter_reason, "low_confidence");
+  assert.equal(filtered.body.incident.top_class, "Typing");
+  assert.equal(filtered.body.incident.peak_db, 74.5);
+
+  const bad = await api().post("/api/incidents").set(auth).send({ table_id: table.id, db_level: 70, status: "IGNORED", filter_reason: "because" });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /Filter reason must be one of/);
 });

@@ -14,8 +14,9 @@ test("create, read, update, delete a table", async () => {
   const created = await api().post("/api/tables").set(auth).send({ table_number: 8, sensor_node_id: "NODE-008", description: "Window" });
   assert.equal(created.status, 201);
   const t = created.body.table;
-  assert.equal(t.warning_threshold, 50);
-  assert.equal(t.critical_threshold, 60);
+  // New tables get the provisional Studify defaults (DEFAULT_*_THRESHOLD).
+  assert.equal(t.warning_threshold, 68);
+  assert.equal(t.critical_threshold, 75);
   assert.equal(t.configured_status, "AVAILABLE");
   assert.deepEqual(t.led_state, { green: 0, yellow: 0, red: 0, critical: false });
 
@@ -110,4 +111,12 @@ test("readings: raw, grouped per minute, and date filters", async () => {
 
   const incidents = await api().get(`/api/tables/${table.id}/incidents`).set(auth);
   assert.deepEqual(incidents.body.incidents, []);
+});
+
+test("default thresholds for new tables come from the environment and are checked", async () => {
+  const { readThresholdDefaults } = await import("../src/config/thresholdDefaults.js");
+  assert.deepEqual(readThresholdDefaults({}), { warning: 68, critical: 75 });
+  assert.deepEqual(readThresholdDefaults({ DEFAULT_WARNING_THRESHOLD: "70", DEFAULT_CRITICAL_THRESHOLD: "80" }), { warning: 70, critical: 80 });
+  assert.throws(() => readThresholdDefaults({ DEFAULT_WARNING_THRESHOLD: "80", DEFAULT_CRITICAL_THRESHOLD: "75" }), /lower than/);
+  assert.throws(() => readThresholdDefaults({ DEFAULT_CRITICAL_THRESHOLD: "loud" }), /between 0 and 150/);
 });

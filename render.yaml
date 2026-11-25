@@ -6,6 +6,10 @@ services:
     name: enoise-api
     runtime: node
     plan: free
+    # Same region as the Neon database (AWS ap-southeast-1). Each sensor
+    # reading needs several database round trips, so the API must sit next
+    # to the database. Render can't move a service to another region later.
+    region: singapore
     rootDir: server
     buildCommand: npm ci --omit=dev
     startCommand: npm start
@@ -14,12 +18,35 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Node 22, same as engines in server/package.json and .nvmrc.
       - key: NODE_VERSION
         value: "22"
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_EXPIRES_IN
         value: 7d
+      - key: ADMIN_JWT_EXPIRES_IN
+        value: 1d
+      - key: MIN_CONFIDENCE
+        value: "0.5"
+      - key: PHONE_CONFIRMATION_SECONDS
+        value: "4"
+      - key: VIOLATION_COOLDOWN_SECONDS
+        value: "120"
+      - key: MAX_STRIKES_PER_DAY
+        value: "1"
+      # Thresholds for NEW tables; provisional until calibration.
+      - key: DEFAULT_WARNING_THRESHOLD
+        value: "68"
+      - key: DEFAULT_CRITICAL_THRESHOLD
+        value: "75"
+      # LED band edges; provisional until calibration (docs/CALIBRATION.md).
+      - key: LED_GREEN_FLOOR_DB
+        value: "50"
+      - key: LED_RED_STEP_DB
+        value: "5"
+      - key: SENSOR_STALE_SECONDS
+        value: "15"
       - key: DATABASE_URL
         sync: false
       - key: CORS_ORIGIN

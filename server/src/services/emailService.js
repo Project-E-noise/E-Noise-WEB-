@@ -64,7 +64,6 @@ export async function sendEmail({ to, subject, html, text }) {
   if (mode === "smtp") return smtpTransporter().sendMail({ from: env.email.from, to, subject, html, text });
 
   // Console fallback for local development.
-  // eslint-disable-next-line no-console
   console.log(`\n[email] (not sent - set EMAIL_PROVIDER to send real email)\n  To:      ${to}\n  Subject: ${subject}\n${text}\n`);
 }
 

@@ -1,4 +1,4 @@
-// Project E-Noise MQTT topic & payload schema (Phase 5).
+// Project E-Noise MQTT topics and payloads.
 //
 // Topics are namespaced under "enoise/<sensor_node_id>/..." — sensor_node_id
 // is the same string already stored on the `tables` row (e.g. "NODE-004")
@@ -8,13 +8,13 @@
 //   enoise/<node>/telemetry      device -> backend   raw dB (+ optional ML)
 //   enoise/<node>/status         device -> backend   online/offline (retained + LWT)
 //   enoise/<node>/led            backend -> device    authoritative LED state
-//   enoise/<node>/audio-request  backend -> device    "capture and send one clip now" (Phase 7)
-//   enoise/<node>/audio          device -> backend    binary WAV clip for YAMNet classification (Phase 7)
+//   enoise/<node>/audio-request  backend -> device    "capture and send one clip now"
+//   enoise/<node>/audio          device -> backend    binary WAV clip for YAMNet classification
 //
 // Backend subscribes with single-level wildcards: "enoise/+/telemetry",
 // "enoise/+/status" and "enoise/+/audio". QoS 1 everywhere — readings can't
-// get lost, but a duplicate delivery is harmless (each is just another
-// noise_readings row, or one extra classification call).
+// get lost, but a duplicate delivery is harmless (one extra reading in a
+// 10 s average, or one extra classification call).
 
 import { ML_CATEGORIES } from "../data/constants.js";
 
@@ -55,10 +55,11 @@ export function nodeIdFromTopic(topic) {
 /**
  * Telemetry payload published by the device, once per sample:
  *   {
- *     "db_level": 62.4,               // required, dB(A) SPL from the MAX9814 front-end
+ *     "db_level": 62.4,
+ *     "fw": "1.1.0",                  // optional, firmware version               // required, estimated dB from the MAX9814 (no A-weighting, see firmware)
  *     "classification": "Loud Conversation",   // optional — omit if the device
  *     "confidence": 0.87,                      //   doesn't run on-device inference;
- *                                               //   YAMNet runs server-side (Phase 7)
+ *                                               //   YAMNet runs server-side
  *     "timestamp": "2026-09-17T10:15:00Z"       // optional, device RTC/NTP time (ISO 8601)
  *   }
  * Only db_level is required. Anything else missing/invalid is dropped, not
@@ -87,6 +88,9 @@ export function parseTelemetry(raw) {
   const conf = Number(data.confidence);
   if (data.confidence != null && Number.isFinite(conf) && conf >= 0 && conf <= 1) confidence = conf;
 
+  // Firmware version, e.g. "1.1.0" (firmware 1.1+). Anything odd is dropped.
+  const fw = typeof data.fw === "string" && /^[A-Za-z0-9._+-]{1,20}$/.test(data.fw) ? data.fw : null;
+
   let timestamp = null;
   if (data.timestamp) {
     // Ignore device clocks that are clearly wrong (more than a day off).
@@ -96,7 +100,7 @@ export function parseTelemetry(raw) {
     }
   }
 
-  return { db_level, classification, confidence, timestamp };
+  return { db_level, classification, confidence, timestamp, fw };
 }
 
 /**
@@ -124,7 +128,7 @@ export function buildLedPayload({ green, yellow, red, critical }) {
 }
 
 /**
- * Phase 7 audio capture request (backend -> device). Trivial/empty payload —
+ * Audio capture request (backend -> device). Trivial/empty payload —
  * the topic itself is the instruction, nothing to configure per-request.
  * Not retained: it's a one-off "do this now", not a standing state.
  */
@@ -133,10 +137,10 @@ export function buildAudioRequestPayload() {
 }
 
 /**
- * Phase 7 audio clip (device -> backend): a raw WAV file, mono 16-bit PCM
+ * Audio clip (device -> backend): a raw WAV file, mono 16-bit PCM
  * at 16 kHz (YAMNet's native input rate), ~1 second long. Sent as a binary
  * MQTT payload, NOT JSON — mqttClient.js passes the Buffer straight through
- * to the ML service unmodified. Per the spec's "no raw audio storage" rule,
+ * to the ML service unmodified. Raw audio is never stored (privacy):
  * this buffer is only ever held in memory long enough to forward it to the
  * classifier (server/src/services/mlClient.js) and is never written to
  * disk or the database — only the resulting {category, confidence} is.

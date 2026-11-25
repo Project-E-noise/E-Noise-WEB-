@@ -177,6 +177,7 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.02em; line-height: 1.25; }
 
 /* Grids */
 .metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
+.metrics-grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .tables-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--space-4); }
 .two-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .auto-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-4); }
@@ -326,6 +327,10 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.02em; line-height: 1.25; }
 .table-card { display: block; padding: var(--space-5); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); color: inherit; text-decoration: none; transition: border-color 0.15s, box-shadow 0.15s; }
 .table-card:hover { border-color: var(--success); box-shadow: var(--shadow-md); }
 .table-card.is-critical { border-color: #f0b3b3; }
+/* A confirmed violation: a thick ring plus the VIOLATION badge, readable
+   without colour vision or animation. */
+.is-violation { outline: 3px solid var(--danger); outline-offset: 2px; }
+.db-val.is-stale, .mini-value.is-stale { opacity: 0.45; }
 .zone-hdr { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-3); }
 .zone-name { font-size: 15px; font-weight: 600; }
 .zone-node { font-family: var(--mono); font-size: var(--text-xs); color: var(--text-faint); }
@@ -352,6 +357,21 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.02em; line-height: 1.25; }
 .led-dot-crit { background: var(--led-red); box-shadow: 0 0 0 3px var(--danger-soft); }
 .led-dot-crit.blink { animation: blink 0.75s ease-in-out infinite; }
 @keyframes blink { 50% { opacity: 0.2; } }
+.led-array.is-stale .led-dot { opacity: 0.12; filter: grayscale(1); }
+.led-row-crit { align-items: center; }
+.led-crit-label { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: var(--danger); }
+
+/* Confirmation progress ("Loud for 6/10 s" -> "Checking sound type...") */
+.confirm-progress { display: grid; gap: 4px; margin-bottom: var(--space-3); }
+.confirm-progress.compact { margin-bottom: var(--space-2); }
+.confirm-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.confirm-bar span { display: block; height: 100%; background: var(--warning); transition: width 0.4s linear; }
+.confirm-bar span.checking { background: var(--info); }
+.confirm-text { font-size: var(--text-xs); font-weight: 600; color: var(--text-muted); display: inline-flex; align-items: center; gap: 4px; }
+
+/* Tab counts (Incident Logs) */
+.tab-count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: var(--radius-pill); background: rgba(0, 0, 0, 0.08); font-size: 11px; text-align: center; }
+.tab.active .tab-count { background: rgba(255, 255, 255, 0.25); }
 
 /* ML classification chip */
 .classify-chip { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--surface-muted); }

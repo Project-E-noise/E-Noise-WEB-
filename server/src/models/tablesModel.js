@@ -26,24 +26,26 @@ export async function findClash({ table_number, sensor_node_id, excludeId }) {
   return rows[0] || null;
 }
 
-export async function create({ table_number, sensor_node_id, description, status, warning_threshold, critical_threshold, confirmation_seconds }) {
+export async function create({ table_number, sensor_node_id, description, status, warning_threshold, critical_threshold, confirmation_seconds, calibration_offset_db = 0, calibration_gain = 1 }) {
   const { rows } = await query(
-    `INSERT INTO tables (table_number, sensor_node_id, description, status, warning_threshold, critical_threshold, confirmation_seconds)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO tables (table_number, sensor_node_id, description, status, warning_threshold, critical_threshold, confirmation_seconds,
+                         calibration_offset_db, calibration_gain)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
-    [table_number, sensor_node_id, description, status, warning_threshold, critical_threshold, confirmation_seconds]
+    [table_number, sensor_node_id, description, status, warning_threshold, critical_threshold, confirmation_seconds, calibration_offset_db, calibration_gain]
   );
   return rows[0];
 }
 
-export async function update(id, { table_number, sensor_node_id, description, status, warning_threshold, critical_threshold, confirmation_seconds }) {
+export async function update(id, { table_number, sensor_node_id, description, status, warning_threshold, critical_threshold, confirmation_seconds, calibration_offset_db, calibration_gain }) {
   const { rows } = await query(
     `UPDATE tables
      SET table_number = $2, sensor_node_id = $3, description = $4, status = $5,
-         warning_threshold = $6, critical_threshold = $7, confirmation_seconds = $8, updated_at = NOW()
+         warning_threshold = $6, critical_threshold = $7, confirmation_seconds = $8,
+         calibration_offset_db = $9, calibration_gain = $10, updated_at = NOW()
      WHERE id = $1
      RETURNING *`,
-    [id, table_number, sensor_node_id, description, status, warning_threshold, critical_threshold, confirmation_seconds]
+    [id, table_number, sensor_node_id, description, status, warning_threshold, critical_threshold, confirmation_seconds, calibration_offset_db, calibration_gain]
   );
   return rows[0];
 }

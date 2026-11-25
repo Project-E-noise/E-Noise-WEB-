@@ -1,18 +1,12 @@
-import bcrypt from "bcryptjs";
 import { env } from "../config/env.js";
 import * as adminsModel from "../models/adminsModel.js";
 import { generateVerificationToken, signSession, safeEqual } from "../utils/tokens.js";
 import { badRequest, conflict, forbidden, gone, notFound, unauthorized } from "../utils/errors.js";
 import * as check from "../utils/validate.js";
+import { hashPassword, checkPassword, VERIFICATION_TOKEN_TTL_MS } from "../utils/passwords.js";
 import { sendVerificationEmail } from "./emailService.js";
 
-const VERIFICATION_TOKEN_TTL_MS = 1000 * 60 * 60 * 24; // 24 hours
-const BCRYPT_ROUNDS = 10;
-// Compared against when the email is unknown, so a wrong email takes about
-// as long as a wrong password (makes guessing which emails exist harder).
-const DUMMY_HASH = bcrypt.hashSync("not-a-real-password", BCRYPT_ROUNDS);
-
-export const publicAdmin = adminsModel.publicAdmin;
+const publicAdmin = adminsModel.publicAdmin;
 
 function verifyUrl(token) {
   return `${env.clientUrl}/verify-email?token=${token}`;
@@ -31,7 +25,7 @@ export async function register(body = {}) {
 
   if (await adminsModel.findByEmail(email)) throw conflict("An account with that email already exists.");
 
-  const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  const password_hash = await hashPassword(password);
   const verification_token = generateVerificationToken();
   const verification_token_expires_at = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString();
 
@@ -52,13 +46,13 @@ export async function login(body = {}) {
   if (!email || !password) throw badRequest("Enter your email and password.");
 
   const admin = await adminsModel.findByEmail(email);
-  const matches = await bcrypt.compare(password, admin?.password_hash || DUMMY_HASH);
+  const matches = await checkPassword(password, admin?.password_hash);
   if (!admin || !matches) throw unauthorized("Invalid email or password.");
 
   if (admin.status === "DISABLED") throw forbidden("This administrator account has been disabled.");
   if (!admin.is_verified) throw forbidden("Email verification required. Please verify your email before logging in.");
 
-  return { token: signSession(admin.id, "admin"), admin: publicAdmin(admin) };
+  return { token: signSession(admin.id, "admin", { version: admin.token_version ?? 0 }), admin: publicAdmin(admin) };
 }
 
 export async function verifyEmail(token) {
@@ -97,11 +91,11 @@ export async function updateAdminProfile(id, body = {}) {
 
 export async function changeAdminPassword(id, body = {}) {
   const admin = await adminsModel.findById(id);
-  if (!admin || !await bcrypt.compare(String(body.current_password || ""), admin.password_hash)) {
+  if (!admin || !await checkPassword(body.current_password, admin.password_hash)) {
     throw badRequest("Current password is incorrect.");
   }
   const newPassword = check.password(body.new_password, "New password");
   if (newPassword === body.current_password) throw badRequest("New password must differ from the current password.");
-  await adminsModel.updatePassword(id, await bcrypt.hash(newPassword, BCRYPT_ROUNDS));
+  await adminsModel.updatePassword(id, await hashPassword(newPassword));
   return { message: "Password updated." };
 }

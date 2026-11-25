@@ -2,9 +2,9 @@
 
 Noise monitoring for study-hub tables. Each table has an ESP32 sensor node with a
 MAX9814 microphone and 11 LEDs. The node sends its sound level every second; the
-backend decides the LED state, confirms incidents when a table stays too loud for
-10 seconds, tracks violations (3 strikes = one-week ban) and shows everything live
-on a web dashboard. Study-hub members can sign in to a client portal to see their
+backend decides the LED state, times loud streaks, asks the sound classifier
+whether a sustained loud event is a violation sound, tracks violations (3 strikes =
+one-week ban) and shows everything live on a web dashboard. Study-hub members can sign in to a client portal to see their
 own activity and violations.
 
 | Part | Folder | Tech |
@@ -12,7 +12,7 @@ own activity and violations.
 | Admin dashboard + client portal | `capstone/` | React 19, Vite, React Router, Chart.js |
 | REST API + WebSocket + MQTT ingestion | `server/` | Node 20+, Express, PostgreSQL (`pg`, no ORM), JWT, MQTT.js, ws |
 | Sensor node firmware | `firmware/enoise_node/` | ESP32 Arduino, PubSubClient, ArduinoJson |
-| Noise classifier (optional add-on) | `ml-service/` | Python, FastAPI, TensorFlow YAMNet |
+| Noise classifier (decides violations) | `ml-service/` | Python, FastAPI, TensorFlow YAMNet |
 
 ## Architecture
 
@@ -30,18 +30,19 @@ own activity and violations.
                                             +---------------------+
                                                |  WAV clip (only when loud)
                                                v
-                                         ml-service (YAMNet, optional)
+                                         ml-service (YAMNet: is this loud
+                                         event a violation sound?)
 ```
 
 MQTT topics (`server/src/mqtt/topics.js`):
 
 | Topic | Direction | Payload |
 |---|---|---|
-| `enoise/<node>/telemetry` | device -> API | `{"db_level": 62.4}` (+ optional `classification`, `confidence`, `timestamp`) |
+| `enoise/<node>/telemetry` | device -> API | `{"db_level": 62.4, "fw": "1.1.0"}` (+ optional `classification`, `confidence`, `timestamp`) |
 | `enoise/<node>/status` | device -> API, retained, also the Last Will | `{"online": true}` |
 | `enoise/<node>/led` | API -> device, retained | `{"green":5,"yellow":3,"red":0,"critical":false}` |
 | `enoise/<node>/audio-request` | API -> device | `{"request":"capture"}` |
-| `enoise/<node>/audio` | device -> API | 1 s WAV clip (binary), only after a request |
+| `enoise/<node>/audio` | device -> API | 1 s WAV clip (binary); accepted only within 10 s of a request |
 
 `<node>` is the table's **Sensor node ID** (e.g. `NODE-001`). Adding a table in
 Table Configuration is all it takes to register a node.
@@ -49,35 +50,74 @@ Table Configuration is all it takes to register a node.
 ### Business rules (all enforced on the server)
 
 - **LEDs:** green/yellow/red follow each reading and the table's warning/critical
-  thresholds (warning must be lower than critical).
-- **Critical confirmation:** the critical bulb and a CONFIRMED incident only happen after
-  the level stays at or above the critical threshold for `confirmation_seconds`
-  (default 10) without a gap in readings. State is kept in the database, so a
-  restart doesn't lose it.
+  thresholds (warning must be lower than critical): green 1-5 from a quiet floor
+  (50 dB) up to warning, yellow 1-3 between warning and critical, 1 red at critical,
+  2 red at critical + 5 dB (provisional band edges, `src/utils/ledLogic.js`).
+- **Violation gating (the dB level triggers, the sound type decides):** a loud
+  streak starts at the first reading at/above the critical threshold and survives
+  dips of up to 2 s; a silence of more than 5 s discards it. Audio is requested at
+  the streak start and every 5 s. Once the streak lasted `confirmation_seconds`
+  (default 10; 4 s once a confident phone label arrived, `PHONE_CONFIRMATION_SECONDS`)
+  the labels collected so far decide (`server/src/utils/violationRules.js`):
+  - no label -> **UNVERIFIED** (`no_classification`); only labels under
+    `MIN_CONFIDENCE` (0.5) -> **UNVERIFIED** (`low_confidence`);
+  - a strict majority of confident labels in `VIOLATION_CATEGORIES` -> **CONFIRMED**
+    (a violation: strike, critical bulb while the streak is still going);
+  - otherwise (door slam, cough, typing, air-con, traffic, a tie...) -> **IGNORED**
+    (`non_violation_category`). A PAUSED table always gives IGNORED (`table_paused`).
+
+  While the ML service answers, the engine waits up to 8 s for a first label; when
+  it is down it decides at once. IGNORED and UNVERIFIED events never light the bulb,
+  never create a strike and never count toward a ban; they appear under the
+  **Filtered** tab of Incident Logs for review ("Confirm as violation" needs a
+  violation category and then creates the strike). After a decided streak the table
+  has a 120 s cooldown (`VIOLATION_COOLDOWN_SECONDS`). The incident stores the peak
+  dB of the streak, the YAMNet top class and the filter reason. State is kept in
+  `sensor_status`, so a restart doesn't lose it.
+- **Which sounds are violations:** `VIOLATION_CATEGORIES` in
+  `server/src/data/constants.js` (`Loud Conversation`, `Mobile Phone Noise`, `Music`).
+  Remove an entry to stop it counting. `Impact Noise` and `Ambient Baseline` are
+  never violations.
 - **Occupants:** occupants create their own accounts on the client portal; admins
   can't create them or change their email. Registration requires ticking a privacy
   notice (Data Privacy Act of 2012); the time is stored in `occupants.consented_at`
   and shown to admins ("Not recorded" for older accounts). Only an occupant who
   verified their email and set a password can be assigned to a table (others show
   as "Unverified").
-- **Violations and bans:** every CONFIRMED incident linked to an occupant is a violation.
-  The 3rd strike bans the occupant for one week and releases them from their table.
-  The ban ends by itself at `ban_until`, and strikes start again from 0. Violations
-  are kept for `VIOLATION_RETENTION_DAYS` (default 30) and then deleted by a daily
-  cleanup, so strikes only count that period; a running ban is not affected. The same
-  job removes the occupant from incidents older than that and deletes seat history
-  released that long ago (current seats are kept). An admin can lift a ban early.
-  Incident + violation + ban are saved in one transaction.
-- **Raw readings:** `noise_readings` older than `NOISE_READINGS_RETENTION_DAYS`
-  (default 7) are deleted every hour in batches, to stay inside Neon's free 1 GB.
-  Incidents, violations and sensor status are separate and not affected. Analytics
-  and readings exports can therefore only cover the last 7 days.
-- **Categories:** exactly four, spelled identically in JS, SQL, firmware and Python:
-  `Loud Conversation`, `Mobile Phone Noise`, `Impact Noise`, `Ambient Baseline`.
+- **Violations and bans:** a CONFIRMED incident linked to an occupant is a violation
+  (strike), at most `MAX_STRIKES_PER_DAY` (default 1) per occupant in any 24 h, so
+  continuous noise can't produce a ban within minutes (later CONFIRMED incidents that
+  day are still logged, just not as strikes). The occupant is the one seated when the
+  streak started. The 3rd strike inside the 30-day window bans the occupant for one
+  week and releases them from their table. The ban ends by itself at `ban_until`, and
+  strikes start again from 0. If an admin moves one of the ban's incidents away from
+  CONFIRMED (or deletes it), its violation is deleted and the ban's strikes are
+  recounted; below 3 the ban is lifted and the remaining strikes count again.
+  Violations are kept for `VIOLATION_RETENTION_DAYS` (default 30) and then deleted by
+  a daily cleanup, so strikes only count that period; a running ban is not affected.
+  The same job removes the occupant from incidents older than that and deletes seat
+  history released that long ago (current seats are kept). An admin can lift a ban
+  early. Incident + violation + ban are saved in one transaction.
+- **Calibration:** each table has a calibration offset and gain (Table Configuration,
+  default 0 dB / x1). The API stores and judges `gain x raw + offset` for every
+  reading (docs/CALIBRATION.md).
+- **Readings storage:** every reading is judged on its own, in real time, but
+  `noise_readings` stores one row per table per **10 s** (average, peak, number of
+  readings; `services/readingWindows.js`). Rows older than
+  `NOISE_READINGS_RETENTION_DAYS` (default 7) are deleted daily in batches, to stay
+  inside Neon's free storage. Incidents, violations and sensor status are separate
+  and not affected. Analytics and readings exports can only cover the last 7 days,
+  at 10 s resolution.
+- **Letting the database sleep:** while no node has sent anything, the API sends no
+  queries at all, so Neon can sleep (docs/DB_LOAD_PROPOSAL.md).
+- **Categories:** exactly five, spelled identically in JS, SQL and Python (checked by
+  `server/tests/categories-sync.test.js`): `Loud Conversation`, `Mobile Phone Noise`,
+  `Music`, `Impact Noise`, `Ambient Baseline`. Incident statuses: `CONFIRMED`,
+  `IGNORED`, `UNVERIFIED`, `DISMISSED` (and legacy `MONITORING`).
 
 ## Local setup
 
-You need **Node.js 20+**, **PostgreSQL 14+** and **git**. Python 3.11 only if you want
+You need **Node.js 22** (see `.nvmrc`; Render and Vercel use 22 too), **PostgreSQL 14+** and **git**. Python 3.11 only if you want
 the ML service; the Arduino IDE or `arduino-cli` only for the firmware.
 
 On Windows PowerShell, if `npm` is blocked by the execution policy, use `npm.cmd`.
@@ -118,10 +158,12 @@ npm install
 npm run dev              # http://127.0.0.1:5173
 ```
 
-### 4. ML service (optional)
+### 4. ML service
 
-The backend works without it; incidents then get the fallback category
-"Loud Conversation". See `ml-service/README.md`.
+The classifier decides whether a loud event is a violation. The backend runs
+without it, but every sustained loud event is then logged as **UNVERIFIED** (no
+strike, no critical bulb) until an admin confirms it. See `ml-service/README.md`.
+Its mapping tests run with `python -m unittest discover -s tests` in `ml-service/`.
 
 ```bash
 cd ml-service
@@ -166,7 +208,8 @@ Running it again adds nothing new.
 | `PORT` | | Default 5000 (Render sets it automatically) |
 | `DATABASE_URL` | yes | Postgres connection string. Neon: add `?sslmode=require` |
 | `JWT_SECRET` | yes in production | 32+ random characters; the server refuses to start in production without it |
-| `JWT_EXPIRES_IN` | | Session length, default `7d` |
+| `JWT_EXPIRES_IN` | | Client session length, default `7d` |
+| `ADMIN_JWT_EXPIRES_IN` | | Admin session length, default `1d`. Admin tokens are revoked on logout (`admins.token_version`) |
 | `CORS_ORIGIN` | yes in production | Comma-separated allowed website origins. One `*` per entry is allowed, e.g. `https://enoise-*-yourname.vercel.app` for Vercel previews |
 | `CLIENT_URL` | yes in production | Website address used inside emails (no trailing slash) |
 | `ADMIN_SIGNUP_CODE` | | Invite code required on `/register`. Empty = admin registration disabled |
@@ -174,12 +217,18 @@ Running it again adds nothing new.
 | `EMAIL_FROM` | | Sender, e.g. `E-Noise <you@example.com>` (must be a verified sender in Brevo) |
 | `BREVO_API_KEY` | with brevo | Brevo API key |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | with smtp | SMTP server (local development only; Render free blocks SMTP) |
-| `HIVEMQ_HOST`, `HIVEMQ_PORT`, `HIVEMQ_USERNAME`, `HIVEMQ_PASSWORD` | | MQTT broker. Empty host = MQTT off |
+| `HIVEMQ_HOST`, `HIVEMQ_PORT`, `HIVEMQ_USERNAME`, `HIVEMQ_PASSWORD` | | MQTT broker (backend credentials; nodes get their own, see Security notes). Empty host = MQTT off |
 | `MQTT_PROTOCOL` | | `mqtts` (TLS, default) or `mqtt` (local test broker) |
-| `ML_SERVICE_URL` | | ML service address, default `http://localhost:8001` |
-| `ML_API_KEY` | | Shared secret sent as `X-API-Key` to the ML service |
-| `SENSOR_STALE_SECONDS` | | A sensor counts as offline after this many seconds without a reading (default 60) |
-| `NOISE_READINGS_RETENTION_DAYS` | | Days raw noise readings are kept; older ones are deleted every hour (default 7, positive whole number) |
+| `ML_SERVICE_URL` | | ML service address. Development default `http://localhost:8001`; in production empty = no classifier (loud events become UNVERIFIED) |
+| `ML_API_KEY` | with ML in production | Shared secret sent as `X-API-Key`. In production the server refuses to start if `ML_SERVICE_URL` is set and this is empty |
+| `MIN_CONFIDENCE` | | A label only counts toward the verdict at/above this confidence, 0-1 (default `0.5`, **placeholder to tune with study-hub recordings**) |
+| `PHONE_CONFIRMATION_SECONDS` | | Sustained time once a confident phone label arrived (default `4`, never longer than the table's `confirmation_seconds`; placeholder) |
+| `VIOLATION_COOLDOWN_SECONDS` | | No new streak on a table for this long after one was decided (default `120`) |
+| `MAX_STRIKES_PER_DAY` | | Strikes one occupant can get in any rolling 24 h (default `1`) |
+| `LED_GREEN_FLOOR_DB`, `LED_RED_STEP_DB` | | LED band edges, default `50` / `5` dB: green counts up in 5 steps from the floor to the warning threshold; the 2nd red LED lights this far above critical. **Provisional until calibration** |
+| `DEFAULT_WARNING_THRESHOLD`, `DEFAULT_CRITICAL_THRESHOLD` | | Thresholds (dB) given to **new** tables, default `68` / `75`. **Provisional until calibration** (Studify's quiet room read ~60 dB, talking ~80-90 dB, uncalibrated). Existing tables keep their own values; change them on the Thresholds page |
+| `SENSOR_STALE_SECONDS` | | A sensor counts as offline after this many seconds without a reading (default 15) |
+| `NOISE_READINGS_RETENTION_DAYS` | | Days the 10 s reading rows are kept; older ones are deleted once a day (default 7, positive whole number) |
 | `VIOLATION_RETENTION_DAYS` | | Days a violation is kept before the daily cleanup deletes it (default 30, positive whole number) |
 | `TEST_DATABASE_URL` | for tests | Separate database whose name contains `test` (it is wiped) |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_CLIENT_EMAIL`, `SEED_CLIENT_PASSWORD` | | Accounts created by the seed |
@@ -200,35 +249,55 @@ Running it again adds nothing new.
 cd server
 # .env must contain TEST_DATABASE_URL=postgresql://user:password@localhost:5432/enoise_test
 npm test
+npm run lint      # ESLint (also in capstone/)
 ```
 
-56 tests (`node:test` + `supertest`) run against a real Postgres database. The
+145 tests (`node:test` + `supertest`) run against a real Postgres database. The
 test database is wiped and migrated first. They cover every endpoint (success and
 main error cases), admin/client role checks and data scoping, the
 incident -> violation -> ban transaction (including rollback and concurrent
-incidents), ban expiry and strike reset, threshold validation, the 10-second
-confirmation engine, exports (incl. CSV formula escaping), analytics, and
-WebSocket authentication.
+incidents), ban expiry and strike reset, threshold validation, the violation-gating
+engine (`decideVerdict`, dip tolerance, reading gaps, label wait, cooldown, PAUSED
+tables, occupant at streak start, atomic label append), the daily strike cap and
+ban lift by recount, the ML client and its health tracking, the audio-request
+window, admin token revocation, exports (incl. CSV formula escaping), analytics,
+WebSocket authentication, that the category strings match across JS, SQL and
+Python, the production start-up checks, `/health/db`, migration 017's node-ID rule,
+`db:seed:tables` and `admin:create`. The engine tests pass simulated times, so they run without sleeping.
+
+The ML service has 20 tests (class mapping and the model-cache repair): `cd ml-service && python -m unittest discover -s tests`.
+The calibration tool has 4: `cd tools/calibration && node --test`. End-to-end checks
+(22 scenarios, no hardware or cloud): `cd tools/simulator && node run-scenarios.js`.
 
 The frontend has no unit tests; it was checked with a Playwright click-through
 of every admin and client page at 375 px, 768 px and 1280 px (see `HANDOFF.md`).
 
 ## Simulator (no hardware needed)
 
-Publishes messages exactly like a real node, through the same broker the API uses
-(needs the `HIVEMQ_*` values in `server/.env`, and the API running):
+`tools/simulator/` has virtual nodes that behave like the firmware (same topics,
+payload, dB maths, LED handling and audio clips), a local MQTT broker and a mock
+ML service. See [tools/simulator/README.md](tools/simulator/README.md) for the
+Windows commands. In short:
 
 ```bash
-cd server
-npm run simulate                                         # NODE-001, normal levels
-npm run simulate -- --node NODE-002 --spike              # climbs into critical and holds it
-npm run simulate -- --node NODE-002 --spike --seconds 40 # stops by itself
+cd tools/simulator
+npm install
+node run-scenarios.js                                  # all 22 end-to-end scenarios, local only
+node virtual-node.js --node NODE-002 --scenario talking   # one node, against a local broker
 ```
 
-With `--spike`, watch Live Overview: after ~10 s above critical the table shows the
-critical bulb, a CONFIRMED incident appears in Incident Logs, and the table's
-occupant gets a violation (Maria is on table 2 in the demo data with 2 strikes, so
-this bans her). Stop with Ctrl+C or `--seconds`.
+The same virtual node can publish through a real broker (e.g. to test a new one
+before re-flashing the nodes):
+
+```powershell
+$env:SIM_MQTT_USERNAME = "<broker user>"; $env:SIM_MQTT_PASSWORD = "<broker password>"
+node virtual-node.js --broker mqtts://<broker host>:8883 --node NODE-002 --scenario talking
+```
+
+Watch Live Overview: the card shows "Loud for 6/10 s", then the event is decided.
+With the ML service (or mock-ml.js) running, loud talking is CONFIRMED and the
+critical bulb lights; without it the event is logged as **UNVERIFIED** under
+Incident Logs -> Filtered (no bulb, no strike).
 
 ## Security notes
 
@@ -253,9 +322,25 @@ this bans her). Stop with Ctrl+C or `--seconds`.
   why the app avoids injecting HTML.
 - The WebSocket gets the token as `?token=` because browsers can't set headers on
   WebSocket connections. Request logs replace any `token=` value with `[hidden]`,
-  and the WebSocket upgrade isn't logged by the API.
-- The firmware connects with TLS but skips certificate checking (`setInsecure()`);
-  load the broker's CA certificate for a real deployment.
+  and the WebSocket upgrade isn't logged by the API. A close code 4001 (rejected
+  token) signs the dashboard out.
+- Admin sessions last one day (`ADMIN_JWT_EXPIRES_IN`) and logging out revokes every
+  token of that admin (`admins.token_version` is checked on each request). Client
+  logout stays stateless.
+- Audio clips on `enoise/<node>/audio` are only classified within 10 s of the
+  backend's own `audio-request` to that node; anything else is dropped unread.
+- In production the API refuses to start with `ML_SERVICE_URL` set but `ML_API_KEY`
+  empty, so a public classifier endpoint is never called without its key.
+- The firmware checks the broker's TLS certificate against the root CA in
+  `secrets.h` (`MQTT_CA_CERT`, `setCACert()`); it does not compile without one.
+- **Per-node MQTT credentials.** Give every node its own broker user so a stolen or
+  cloned node can't publish as another table. In HiveMQ Cloud: Access Management ->
+  Credentials -> add one credential per node (e.g. username `node-001`), permission
+  type "Publish and Subscribe" restricted to the topic filter `enoise/NODE-001/#`
+  (Starter tier and above let you set per-topic permissions; Serverless only has
+  "all topics" credentials, so there the separation is only by password). Put each
+  pair in that node's `secrets.h`. The backend keeps its own credential with
+  `enoise/#`. Nothing in the server needs configuring for this.
 
 ## Deployment (free tiers)
 
@@ -273,18 +358,26 @@ on them.
 
 ### 1. Database: Neon
 
-1. Create a Neon project (region near your users, e.g. Singapore).
-2. Copy the connection string (it ends with `?sslmode=require`). The API turns on
-   SSL automatically for it.
-3. Create the tables and seed from your computer:
-   ```bash
+Step-by-step, with checkboxes: [DEPLOY_CHECKLIST.md](DEPLOY_CHECKLIST.md).
+
+1. Create a Neon project in **AWS Asia Pacific (Singapore)** (the API runs in
+   Render's Singapore region, next to it).
+2. **Connect** -> copy the connection string with **Connection pooling off** for
+   migrations, and keep the one with pooling **on** for Render. Both end with
+   `?sslmode=require`; the API turns on SSL (with certificate checks) for it.
+3. From your computer (PowerShell), create the schema and the 7 Studify tables:
+   ```powershell
    cd server
-   # PowerShell: $env:DATABASE_URL="postgresql://...neon.tech/neondb?sslmode=require"
-   DATABASE_URL="postgresql://...neon.tech/neondb?sslmode=require" npm run db:migrate
-   DATABASE_URL="..." NODE_ENV=production SEED_ADMIN_PASSWORD="<strong password>" SEED_CLIENT_PASSWORD="<strong password>" npm run db:seed
+   $env:DATABASE_URL = "<Neon string, pooling off>"
+   npm run db:migrate          # schema only (migrations 001-017)
+   npm run db:seed:tables      # tables 1-7 = NODE-001..007, default thresholds, table 7 PAUSED
+   Remove-Item Env:DATABASE_URL
    ```
-   Skip the seed if you don't want demo data in production (then create the first
-   admin through `/register` with `ADMIN_SIGNUP_CODE`).
+   Don't run `npm run db:seed` on the production database: it adds demo people and
+   fake history. **Render does not run migrations:** run `npm run db:migrate`
+   again after every new migration.
+4. The first admin registers at `/register` with `ADMIN_SIGNUP_CODE` and verifies
+   by email. If email isn't working, use `npm run admin:create` (DEPLOY_CHECKLIST.md).
 
 Don't use Render's free Postgres (it expires) or Supabase (not allowed for this project).
 
@@ -304,8 +397,8 @@ Don't use Render's free Postgres (it expires) or Supabase (not allowed for this 
 > Options: HiveMQ Cloud **Starter** (paid, about $0.34/hour plus messages, 15-day trial),
 > or another hosted broker with TLS on 8883, e.g. **EMQX Serverless** (free quota
 > 1 GB traffic + 1M session-minutes per month: enough for a few nodes during opening
-> hours, not 7 nodes sending every second 24/7). Run `npm run simulate` against the
-> new broker before re-flashing the nodes.
+> hours, not 7 nodes sending every second 24/7). Run `tools/simulator/virtual-node.js`
+> against the new broker before re-flashing the nodes (see Simulator below).
 
 ### 3. Email: Brevo
 
@@ -317,13 +410,17 @@ Don't use Render's free Postgres (it expires) or Supabase (not allowed for this 
 
 1. Push this repo to GitHub.
 2. Render -> **New -> Blueprint** -> pick the repo. `render.yaml` creates the free
-   web service `enoise-api` (root `server/`, `npm ci --omit=dev`, `npm start`,
-   health check `/health`) and generates `JWT_SECRET`.
-3. Fill in the values it asks for:
-   `DATABASE_URL` (Neon), `CORS_ORIGIN` (your Vercel URL(s)), `CLIENT_URL` (main Vercel URL),
-   `ADMIN_SIGNUP_CODE`, `EMAIL_FROM`, `BREVO_API_KEY`, the `HIVEMQ_*` values, and
-   `ML_SERVICE_URL` / `ML_API_KEY` (leave empty if you don't run the ML service).
-4. After deploy, open `https://<service>.onrender.com/health`.
+   web service `enoise-api` in the **Singapore** region (root `server/`, Node 22,
+   `npm ci --omit=dev`, `npm start`, health check `/health`) and generates
+   `JWT_SECRET`. The region can't be changed later.
+3. Fill in the values it asks for (table in DEPLOY_CHECKLIST.md):
+   `DATABASE_URL` (Neon, pooled), `CORS_ORIGIN` (your Vercel URL(s)), `CLIENT_URL` (main Vercel URL),
+   `ADMIN_SIGNUP_CODE`, `EMAIL_FROM`, `BREVO_API_KEY` (**required** for verification and
+   set-password emails), the `HIVEMQ_*` values, and `ML_SERVICE_URL` / `ML_API_KEY`
+   (leave empty if you don't run the ML service). In production the API refuses to start
+   without `JWT_SECRET`, `DATABASE_URL`, `CORS_ORIGIN` and `CLIENT_URL`.
+4. After deploy, open `https://<service>.onrender.com/health` (no database) and
+   `/health/db` (checks the database). The start-up log says whether ML and email are on.
 
 **Keeping it awake.** A sleeping free service drops its MQTT connection, so live
 readings stop until someone opens the site (wake-up takes about a minute; the
@@ -332,7 +429,9 @@ while it sleeps are lost. During opening hours, keep it awake with a free monito
 
 - [UptimeRobot](https://uptimerobot.com) (HTTP monitor, 5-minute interval) or
   [cron-job.org](https://cron-job.org) (every 10 minutes) calling `https://<service>.onrender.com/health`.
-- `/health` doesn't touch the database, so Neon can still sleep.
+- `/health` doesn't touch the database, and while no node is sending, the API sends
+  no queries at all, so Neon sleeps when the nodes are off (outside opening hours).
+  See [docs/DB_LOAD_PROPOSAL.md](docs/DB_LOAD_PROPOSAL.md) for the compute estimate.
 - One service awake all month uses ~744 of the 750 free hours. Don't run a second
   free service in the same Render workspace around the clock.
 
@@ -342,6 +441,7 @@ while it sleeps are lost. During opening hours, keep it awake with a free monito
    (framework Vite, build `npm run build`, output `dist`; `capstone/vercel.json`
    already sends every path to `index.html`, so deep links and email links work).
 2. Environment variable: `VITE_API_BASE_URL=https://<service>.onrender.com`. Redeploy after changing it.
+   The build **fails** if it is missing (on purpose: otherwise the site would call localhost).
 3. Add the Vercel URL to `CORS_ORIGIN` and `CLIENT_URL` on Render. Preview deployments
    have their own URLs: add a pattern such as `https://enoise-*-<your-vercel-name>.vercel.app`
    to `CORS_ORIGIN` if you want previews to reach the API.
@@ -375,17 +475,26 @@ each ESP32, and check the table shows "Online" in Live Overview.
 
 ## Known limitations
 
-- **dB values are not calibrated.** The firmware turns microphone voltage into an
-  estimated dB value using an assumed reference point. Calibrate against a sound level
-  meter before treating readings as real dB(A) (`docs/HARDWARE_GUIDE.md`).
-- **The classifier is not validated.** YAMNet's general sound classes are mapped to
-  the four categories by keywords; it has not been tested on labeled study-hub audio.
+- **dB values are not calibrated yet.** Calibrate every node against a reference
+  meter after flashing firmware 1.1.0 (docs/CALIBRATION.md), and switch the
+  MAX9814's AGC off in hardware (TH to MICBIAS); the firmware can't. Until then
+  readings are shown as "dB (est.)". There is a 150 Hz high-pass filter but no full
+  A-weighting.
+- **The classifier is not validated.** YAMNet's 521 classes are mapped to the five
+  categories by an explicit class list (`ml-service/category_mapping.py`); it has not
+  been tested on labeled study-hub audio, and `MIN_CONFIDENCE` is a placeholder.
   `ml-service/finetune_stub.py` is the planned starting point once such data exists.
+- **No neighbour crosstalk check.** A loud table can trip the sensor of the table next
+  to it. The engine has a `neighbor_louder` filter reason reserved for this, but the
+  `tables` table has no position/adjacency data yet, so the check is not implemented.
 - Logout is stateless: a copied token works until it expires (`JWT_EXPIRES_IN`).
 - Rate-limit counters are kept in memory, so they reset when the API restarts or sleeps.
 - On Render free, sensor data is lost while the API sleeps (see Keeping it awake).
-- PAUSED / OFFLINE table status is informational; readings from such a table still
-  create incidents.
+- A PAUSED table still logs loud events, as IGNORED (`table_paused`); OFFLINE status
+  is informational only.
 - Client portal date filters use whole UTC days; admin pages use the viewer's local time.
 - HiveMQ Cloud Serverless is retired on 2026-12-31 (see Deployment step 2).
-- The firmware skips TLS certificate checks (`setInsecure()`).
+- The firmware's base curve (`CAL_TABLE`) holds placeholder rows; the per-node
+  calibration offset/gain is applied on top of it by the API.
+- If the API crashes, up to the last 10 s of stored averages can be lost (the live
+  view and violation decisions are not affected).

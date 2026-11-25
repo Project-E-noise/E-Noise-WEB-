@@ -5,11 +5,15 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { env } from "../src/config/env.js";
 import { api, resetDatabase, closeDatabase, createAdmin, createTable, createOccupant, assign, bearer, query } from "./helpers.js";
 import { cleanupOldViolations } from "../src/services/violationsService.js";
 
 let auth;
 before(async () => {
+  // These tests are about the ban rule itself; the daily strike cap has
+  // its own tests in strikes.test.js.
+  env.maxStrikesPerDay = 100;
   await resetDatabase();
   auth = bearer((await createAdmin()).token);
 });

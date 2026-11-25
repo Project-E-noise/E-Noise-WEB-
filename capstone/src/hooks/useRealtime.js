@@ -1,27 +1,33 @@
 import { useEffect, useRef, useState } from "react";
 import { getWsUrl } from "../services/apiClient";
 
-// Transport-agnostic real-time abstraction (spec section 35 / src/hooks/useRealtime.js).
+// Real-time data for a page.
 //
-// Phase 6: prefers a WebSocket push connection. The backend sends a small
-// event (e.g. "table:update") whenever MQTT ingestion changes something;
-// on receiving one, this hook re-runs `fetcher` and hands the result to
-// `onData` -- so consumers keep receiving exactly the same shape of data
-// they always did (a full re-fetch via the existing REST call), just
-// triggered by a real event instead of a fixed timer. If the socket can't
-// connect or drops, it transparently falls back to polling `fetcher` on
-// `interval` until the socket reconnects. Consumers never change: same
-// {fetcher, onData, interval, enabled} call signature as before.
+// Prefers a WebSocket. The backend pushes a small event whenever MQTT
+// ingestion changes something:
+//   { type: "table:update", table }       one table's full live state
+//   { type: "incident:created", incident } a new incident row
 //
-// It never invents data: every onData call is the result of a real
-// fetcher() call, whether triggered by a WS event or a poll tick. A failed
-// fetch is simply skipped -- the page's own useAsync call already surfaces
-// a proper error state, so this stays silent.
-export function useRealtime({ fetcher, onData, interval = 5000, enabled = true }) {
+// Two ways to consume them:
+// - onEvent(msg): the page merges the payload into its own state (no
+//   request made). This is what the live pages use: with 7 tables sending
+//   a reading every second, re-fetching everything on each message was
+//   7 requests per second.
+// - without onEvent: every event triggers a debounced re-fetch (fetcher ->
+//   onData), the old behaviour.
+//
+// In both modes, fetcher() runs when the socket opens (to seed the page),
+// every `refreshInterval` ms while connected (to refresh derived numbers
+// such as 24 h stats and charts), and every `interval` ms while the socket
+// is down (polling fallback). Close code 4001 means the token was rejected:
+// the app signs out.
+export function useRealtime({ fetcher, onData, onEvent, interval = 5000, refreshInterval = 60000, enabled = true }) {
   const savedFetcher = useRef(fetcher);
   const savedOnData = useRef(onData);
+  const savedOnEvent = useRef(onEvent);
   savedFetcher.current = fetcher;
   savedOnData.current = onData;
+  savedOnEvent.current = onEvent;
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
@@ -29,6 +35,7 @@ export function useRealtime({ fetcher, onData, interval = 5000, enabled = true }
     let cancelled = false;
     let socket = null;
     let pollId = null;
+    let refreshId = null;
     let reconnectTimer = null;
     let debounceTimer = null;
     let reconnectDelay = 2000;
@@ -62,6 +69,18 @@ export function useRealtime({ fetcher, onData, interval = 5000, enabled = true }
       }
     };
 
+    const startRefresh = () => {
+      if (refreshId || !refreshInterval) return;
+      refreshId = setInterval(refetch, refreshInterval);
+    };
+
+    const stopRefresh = () => {
+      if (refreshId) {
+        clearInterval(refreshId);
+        refreshId = null;
+      }
+    };
+
     const scheduleReconnect = () => {
       if (cancelled) return;
       reconnectTimer = setTimeout(connectSocket, reconnectDelay);
@@ -82,6 +101,7 @@ export function useRealtime({ fetcher, onData, interval = 5000, enabled = true }
         if (cancelled) return;
         reconnectDelay = 2000;
         stopPolling();
+        startRefresh();
         setConnected(true);
         refetch(); // seed with current data the moment the socket is live
       };
@@ -94,12 +114,20 @@ export function useRealtime({ fetcher, onData, interval = 5000, enabled = true }
         } catch {
           return;
         }
-        if (msg.type === "table:update" || msg.type === "incident:created") debouncedRefetch();
+        if (msg.type !== "table:update" && msg.type !== "incident:created") return;
+        if (savedOnEvent.current) savedOnEvent.current(msg);
+        else debouncedRefetch();
       };
 
-      socket.onclose = () => {
+      socket.onclose = event => {
         if (cancelled) return;
         setConnected(false);
+        stopRefresh();
+        if (event?.code === 4001) {
+          // The server rejected the token: sign out everywhere in this tab.
+          window.dispatchEvent(new Event("enoise:auth-expired"));
+          return;
+        }
         startPolling(); // keep the page live even while the socket is down
         scheduleReconnect();
       };
@@ -114,6 +142,7 @@ export function useRealtime({ fetcher, onData, interval = 5000, enabled = true }
     return () => {
       cancelled = true;
       stopPolling();
+      stopRefresh();
       clearTimeout(debounceTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (socket?.readyState === WebSocket.CONNECTING) {
@@ -126,7 +155,27 @@ export function useRealtime({ fetcher, onData, interval = 5000, enabled = true }
         socket?.close();
       }
     };
-  }, [enabled, interval]);
+  }, [enabled, interval, refreshInterval]);
 
   return { connected };
+}
+
+// Merge helpers for setData(prev => ...). They return undefined when nothing
+// is loaded yet, which keeps the current state (the fetch on connect fills it).
+
+/** Replaces one table in a { tables: [...] } payload (or appends a new one). */
+export function mergeTable(data, table) {
+  if (!data?.tables) return undefined;
+  const index = data.tables.findIndex(t => t.id === table.id);
+  if (index === -1) return { ...data, tables: [...data.tables, table].sort((a, b) => a.table_number - b.table_number) };
+  const tables = data.tables.slice();
+  tables[index] = table;
+  return { ...data, tables };
+}
+
+/** Adds a new incident to the front of a { incidents: [...] } payload. */
+export function prependIncident(data, incident) {
+  if (!data?.incidents) return undefined;
+  if (data.incidents.some(i => i.id === incident.id)) return data;
+  return { ...data, incidents: [incident, ...data.incidents] };
 }

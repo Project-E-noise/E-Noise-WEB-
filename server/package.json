@@ -2,7 +2,7 @@
   "name": "project-enoise-backend",
   "version": "0.1.0",
   "engines": {
-    "node": ">=20.0.0"
+    "node": "22.x"
   },
   "private": true,
   "type": "module",
@@ -13,8 +13,10 @@
     "dev": "node --watch src/server.js",
     "db:migrate": "node db/migrate.js",
     "db:seed": "node db/seed.js",
-    "simulate": "node scripts/simulate-device.js",
-    "test": "node --test --test-concurrency=1"
+    "db:seed:tables": "node db/seed-tables.js",
+    "admin:create": "node scripts/create-admin.js",
+    "test": "node --test --test-concurrency=1",
+    "lint": "eslint ."
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -31,6 +33,9 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "eslint": "9.39.1",
+    "globals": "16.5.0",
     "supertest": "^7.3.2"
   }
 }

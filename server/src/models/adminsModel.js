@@ -57,6 +57,12 @@ export async function setVerificationToken(id, { verification_token, verificatio
   return rows[0];
 }
 
+/** Revokes every session token issued so far for this admin. */
+export async function bumpTokenVersion(id) {
+  const { rows } = await query("UPDATE admins SET token_version = token_version + 1, updated_at = NOW() WHERE id = $1 RETURNING token_version", [id]);
+  return rows[0]?.token_version ?? null;
+}
+
 export function publicAdmin(admin) {
   return {
     id: admin.id,
