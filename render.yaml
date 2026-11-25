@@ -40,6 +40,11 @@ services:
         value: "68"
       - key: DEFAULT_CRITICAL_THRESHOLD
         value: "75"
+      # LED band edges; provisional until calibration (docs/CALIBRATION.md).
+      - key: LED_GREEN_FLOOR_DB
+        value: "50"
+      - key: LED_RED_STEP_DB
+        value: "5"
       - key: SENSOR_STALE_SECONDS
         value: "15"
       - key: DATABASE_URL

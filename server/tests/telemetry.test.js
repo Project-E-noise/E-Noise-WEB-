@@ -76,12 +76,17 @@ test("parseTelemetry accepts good payloads and rejects bad ones", () => {
   assert.equal(isLikelyWav(Buffer.from("hello")), false);
 });
 
-test("LED counts follow the thresholds", () => {
-  const t = { warning_threshold: 50, critical_threshold: 60 };
-  assert.deepEqual(computeLedCounts(25, t), { green: 3, yellow: 0, red: 0 });
-  assert.deepEqual(computeLedCounts(50, t), { green: 5, yellow: 1, red: 0 });
-  assert.deepEqual(computeLedCounts(59.9, t), { green: 5, yellow: 3, red: 0 });
-  assert.deepEqual(computeLedCounts(60, t), { green: 5, yellow: 3, red: 2 });
+test("LED counts follow the thresholds (provisional band edges)", () => {
+  const t = { warning_threshold: 68, critical_threshold: 75 };
+  const green = db => computeLedCounts(db, t).green;
+  assert.deepEqual([40, 50, 53.6, 57.2, 60, 60.8, 64.4, 67.9].map(green), [1, 1, 2, 3, 3, 4, 5, 5]);
+  assert.deepEqual(computeLedCounts(68, t), { green: 5, yellow: 1, red: 0 });
+  assert.deepEqual(computeLedCounts(74.9, t), { green: 5, yellow: 3, red: 0 });
+  assert.deepEqual(computeLedCounts(75, t), { green: 5, yellow: 3, red: 1 });
+  assert.deepEqual(computeLedCounts(80, t), { green: 5, yellow: 3, red: 2 });
+  // Low warning threshold: the floor moves down to keep a 10 dB green range.
+  assert.equal(computeLedCounts(40, { warning_threshold: 50, critical_threshold: 60 }).green, 1);
+  assert.equal(computeLedCounts(49, { warning_threshold: 50, critical_threshold: 60 }).green, 5);
 });
 
 test("a violation label + sustained time -> CONFIRMED, critical bulb, strike, peak stored", async () => {

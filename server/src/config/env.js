@@ -83,6 +83,12 @@ const maxStrikesPerDay = readNumber("MAX_STRIKES_PER_DAY", 1, { min: 1, max: 100
 // No new streak starts on a table for this long after one was decided.
 const violationCooldownSeconds = readNumber("VIOLATION_COOLDOWN_SECONDS", 120, { min: 0, max: 86400, integer: true });
 
+// LED band edges (src/utils/ledLogic.js). PROVISIONAL until calibration:
+// green LEDs count up from this "quiet floor" to the warning threshold, and
+// the 2nd red LED lights this many dB above the critical threshold.
+const ledGreenFloorDb = readNumber("LED_GREEN_FLOOR_DB", 50, { min: 0, max: 150 });
+const ledRedStepDb = readNumber("LED_RED_STEP_DB", 5, { min: 0, max: 50 });
+
 // Thresholds given to NEW tables (provisional, see thresholdDefaults.js).
 let thresholdDefaults;
 try {
@@ -151,6 +157,8 @@ export const env = {
   phoneConfirmationSeconds,
   maxStrikesPerDay,
   violationCooldownSeconds,
+  ledGreenFloorDb,
+  ledRedStepDb,
   defaultWarningThreshold: thresholdDefaults.warning,
   defaultCriticalThreshold: thresholdDefaults.critical
 };

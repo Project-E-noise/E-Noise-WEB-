@@ -50,7 +50,9 @@ Table Configuration is all it takes to register a node.
 ### Business rules (all enforced on the server)
 
 - **LEDs:** green/yellow/red follow each reading and the table's warning/critical
-  thresholds (warning must be lower than critical).
+  thresholds (warning must be lower than critical): green 1-5 from a quiet floor
+  (50 dB) up to warning, yellow 1-3 between warning and critical, 1 red at critical,
+  2 red at critical + 5 dB (provisional band edges, `src/utils/ledLogic.js`).
 - **Violation gating (the dB level triggers, the sound type decides):** a loud
   streak starts at the first reading at/above the critical threshold and survives
   dips of up to 2 s; a silence of more than 5 s discards it. Audio is requested at
@@ -215,6 +217,7 @@ Running it again adds nothing new.
 | `PHONE_CONFIRMATION_SECONDS` | | Sustained time once a confident phone label arrived (default `4`, never longer than the table's `confirmation_seconds`; placeholder) |
 | `VIOLATION_COOLDOWN_SECONDS` | | No new streak on a table for this long after one was decided (default `120`) |
 | `MAX_STRIKES_PER_DAY` | | Strikes one occupant can get in any rolling 24 h (default `1`) |
+| `LED_GREEN_FLOOR_DB`, `LED_RED_STEP_DB` | | LED band edges, default `50` / `5` dB: green counts up in 5 steps from the floor to the warning threshold; the 2nd red LED lights this far above critical. **Provisional until calibration** |
 | `DEFAULT_WARNING_THRESHOLD`, `DEFAULT_CRITICAL_THRESHOLD` | | Thresholds (dB) given to **new** tables, default `68` / `75`. **Provisional until calibration** (Studify's quiet room read ~60 dB, talking ~80-90 dB, uncalibrated). Existing tables keep their own values; change them on the Thresholds page |
 | `SENSOR_STALE_SECONDS` | | A sensor counts as offline after this many seconds without a reading (default 15) |
 | `NOISE_READINGS_RETENTION_DAYS` | | Days raw noise readings are kept; older ones are deleted every hour (default 7, positive whole number) |
