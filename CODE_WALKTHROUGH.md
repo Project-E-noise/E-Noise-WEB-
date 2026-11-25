@@ -48,9 +48,10 @@ rules) → **models** (the only place with SQL). Input checks are in
 → `mqtt/topics.js` (`parseTelemetry`) → `services/telemetryService.js` (`ingestTelemetry`)
 → `models/tablesModel.js`, `sensorStatusModel.js`, `noiseReadingsModel.js`.
 
-- Each ESP32 samples its microphone about 4,000 times a second. Every second
-  it publishes the RMS level as an estimated dB value: `{"db_level":61.3}` on
-  `enoise/<NODE_ID>/telemetry`.
+- Each ESP32 samples its microphone about 4,000 times a second, passes every
+  sample through a 150 Hz high-pass filter (against highway rumble), and every
+  second publishes the RMS level as an estimated dB value with its firmware
+  version: `{"db_level":61.3,"fw":"1.1.0"}` on `enoise/<NODE_ID>/telemetry`.
 - The API subscribes to `enoise/+/telemetry` (and `/status`, `/audio`).
   `parseTelemetry` rejects anything that isn't JSON with a number from 0 to 200.
 - The node ID in the topic must match a table's **Sensor node ID**. Unknown IDs
@@ -59,12 +60,22 @@ rules) → **models** (the only place with SQL). Input checks are in
   topic names.
 - Messages from the same node are handled **one at a time, in order**
   (`runInOrder`), so the rules below never run twice at once for one table.
-- Each reading is stored in `noise_readings`. `sensor_status` keeps the latest
-  value and marks the node online.
+  Each message is stamped with the time it **arrived**, so the loud-streak timer
+  stays right even if the database is slow.
+- **Calibration:** `applyCalibration` turns the node's raw value into
+  `gain × raw + offset`, using that table's calibration from Table Configuration
+  (default ×1, +0 dB). Everything after this uses the corrected value.
+- `sensor_status` keeps the latest value (and the raw one, and the firmware
+  version) and marks the node online. Every reading goes through the rules
+  below on its own, but **storage** is grouped: `services/readingWindows.js`
+  writes one `noise_readings` row per table per 10 s (average, peak, number of
+  readings).
 - **Online/offline:** a node publishes a retained `{"online":true}` and leaves
   `{"online":false}` as its MQTT *Last Will*, so the broker reports a power cut.
   If a node just goes silent, `sweepStaleSensors` (every 15 s, `server.js`)
-  marks it offline after `SENSOR_STALE_SECONDS` (15 s).
+  marks it offline after `SENSOR_STALE_SECONDS` (15 s). Once every node has been
+  silent that long and been marked offline, the sweep stops querying the
+  database (`sweepNeeded`), so Neon can sleep while the nodes are off.
 
 ## 3. Noise thresholds, LEDs and the duration rule
 
@@ -76,10 +87,12 @@ rules) → **models** (the only place with SQL). Input checks are in
 - Each table has a **warning** and a **critical** threshold. New tables get
   68 / 75 dB from `DEFAULT_WARNING_THRESHOLD` / `DEFAULT_CRITICAL_THRESHOLD`
   (provisional until calibration); admins change them on the Thresholds page.
-- `computeLedCounts` turns each reading into the 11-LED pattern: green below
-  warning, yellow between warning and critical, red at/above critical. The API
-  sends that pattern back to the node on `enoise/<node>/led`. **The node never
-  decides its own LEDs.**
+- `computeLedCounts` turns each reading into the 11-LED pattern: green 1–5 in
+  steps from a quiet floor (50 dB) up to warning, yellow 1–3 between warning and
+  critical, 1 red at critical and 2 red at critical + 5 dB (provisional band
+  edges, `LED_GREEN_FLOOR_DB` / `LED_RED_STEP_DB`). The API sends that pattern
+  back to the node on `enoise/<node>/led`. **The node never decides its own
+  LEDs.**
 - A reading at or above critical starts a **loud streak**. Dips of up to 2 s
   don't end it; a silence of more than 5 s throws it away.
 - The streak is only judged after it lasted **`confirmation_seconds`** (10 s by
@@ -177,8 +190,9 @@ rules) → **models** (the only place with SQL). Input checks are in
 - Even if the cleanup runs late (e.g. the API was asleep), strikes are counted
   over the last 30 days in the query itself, so an old violation can never
   cause a ban.
-- Raw readings older than `NOISE_READINGS_RETENTION_DAYS` (7) are deleted every
-  hour, in batches, to stay inside Neon's free storage.
+- Reading rows (10 s averages) older than `NOISE_READINGS_RETENTION_DAYS` (7)
+  are deleted once a day, in batches, to stay inside Neon's free storage. Daily
+  rather than hourly, so a sleeping database isn't woken every hour.
 
 ## 8. Live dashboard (WebSocket)
 
@@ -220,7 +234,7 @@ browser `services/apiClient.js` (`getWsUrl`) → `hooks/useRealtime.js` →
 ## 10. Start-up, configuration and database
 
 **Files:** `server.js`, `app.js`, `config/env.js`, `config/thresholdDefaults.js`,
-`config/db.js`, `config/dbConfig.js`; `server/db/migrate.js`, `migrations/001-017`,
+`config/db.js`, `config/dbConfig.js`; `server/db/migrate.js`, `migrations/001-018`,
 `seed-tables.js`, `seed.js`.
 
 - `env.js` reads every setting once. In production it **refuses to start**

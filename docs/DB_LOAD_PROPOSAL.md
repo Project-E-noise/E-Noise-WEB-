@@ -1,109 +1,101 @@
-# Database load for the 14-day study: measurements and proposal
+# Database load for the 14-day study
 
-Status: **proposal, nothing implemented.** Each item below needs your approval.
+Status: **P1 and P2 are built** (branch `deploy-prep`). P3 is documented but not
+built.
 
-## 1. Measured today
+## 1. Measurements
 
 `tools/simulator/measure-db-load.js`: the real API, 7 virtual nodes sending one
 reading per second, a throwaway local Postgres, and Postgres's own statistics.
-Two minutes per phase, 2026-11-24.
+Two minutes per phase.
 
-| Per minute, 7 nodes | All quiet | 2 talking, 5 quiet |
+| Per minute, 7 nodes, all quiet | Before P2 (2026-11-24) | After P2 (2026-11-25) |
 |---|---|---|
-| Readings received | 420 | 415 |
-| Database transactions (≈ round trips) | **3,380** (≈ 8 per reading) | 3,371 |
-| Rows written | **864** | 869 |
-| `noise_readings` inserts | 420 (one per reading) | 415 |
-| `sensor_status` updates | 420 (one per reading) | 430 |
-| `incidents` inserts | 0 | 1 |
+| Readings received | 420 | 420 |
+| Database transactions (≈ round trips) | 3,380 | 3,174 |
+| Rows written | 864 | **486** |
+| `noise_readings` inserts | 420 (one per reading) | **44** (one per table per 10 s) |
+| `sensor_status` updates | 420 | 420 (P3 would cut this) |
+| Size of a reading row (at 1 million rows) | 154 B | 182 B (adds `peak_db`, `samples`) |
 
-Most transactions are reads: each reading looks up its table and sensor state,
-then reads the table's full state (occupant, last incident, stats) to push it
-to the dashboards.
+With 2 tables talking (loud streaks, audio clips, ML) the numbers are the
+same within a few percent.
 
-**Storage per reading row:** 154 bytes (58 MB of table + 90 MB of indexes per
-million rows, measured with 1,000,000 rows).
+**Idle check (P1):** the API ran for 150 s with no nodes, with every database
+statement logged. It made its 5 start-up queries (offline check plus the
+retention cleanups) and **nothing after that**.
 
-## 2. What this means on Neon free
+## 2. What was built
 
-Numbers from the README (checked 2026-11-10; verify on Neon's pricing page):
-100 compute-unit hours (CU-h) per project per month, minimum compute 0.25 CU,
-the database sleeps after 5 minutes without queries, and storage is about 0.5 GB
-(the docs disagree; check the dashboard).
+- **P1. No queries while no node is on.** The 15 s offline check is skipped
+  once every node has been silent longer than `SENSOR_STALE_SECONDS` and has
+  been marked offline. It resumes with the next node message. The raw-readings
+  cleanup runs daily instead of hourly.
+- **P2. One reading row per table every 10 s** (`server/src/services/readingWindows.js`).
+  Each row holds the average, the peak and the number of readings. **Every
+  reading is still judged on its own, in real time**: violations, the 10 s
+  duration rule, LEDs and the live dashboard are unchanged. Averages in
+  analytics are weighted by `samples` and peaks use `peak_db`. On a crash, at
+  most the last 10 s of averages are lost; the windows are written on a normal
+  shutdown or deploy.
+- **P3 (not built).** Update `sensor_status.last_seen` at most every 5 s instead
+  of on every reading. That would cut `sensor_status` writes from 420 to ~84 per
+  minute. It saves database work, but neither compute hours nor storage, so it
+  isn't needed for the free plan.
 
-**Neon charges for time awake, not for the number of queries.** Any query at
-least every 5 minutes keeps it awake, so making each query cheaper doesn't save
-compute hours. Only longer quiet gaps do.
+## 3. Estimate for the 14-day study
 
-Two facts from the code matter here:
+**Assumptions:**
+- **Studify opening hours (Asia/Manila):** Mon–Sat 10:00–01:00 (15 h), Sun
+  15:00–01:00 (10 h), so **100 h per week**. The nodes are powered only then
+  (DEPLOY_CHECKLIST.md).
+- **7 tables**, all with sensors.
+- **Neon free plan** (from the README, checked 2026-11-10; re-check on Neon's
+  pricing page): 100 compute-unit hours (CU-h) per project per month, minimum
+  compute 0.25 CU, sleeps after 5 min without queries, ~0.5 GB storage.
+- The load stays at the minimum 0.25 CU (about 53 small queries per second).
+  Check the Neon dashboard during the first days.
 
-- The API's offline check (`server.js`, every 15 s) runs an UPDATE **even when no
-  node is on**. While the API is awake (and the uptime pinger keeps it awake),
-  Neon never sleeps. The README's "`/health` doesn't touch the database, so
-  Neon can still sleep" is true for `/health`, but this 15 s timer defeats it.
-- The hourly raw-readings cleanup wakes the database once an hour.
+### Compute hours (Neon)
 
-### Compute hours per month (0.25 CU)
+| Item | Hours awake |
+|---|---|
+| Nodes on: 14 days = 2 weeks × 100 h | 200 h |
+| 5 min after closing until Neon sleeps, × 14 | ~1.2 h |
+| Daily retention cleanup, if it runs outside opening hours (5 min) × 14 | ~1.2 h |
+| Admins using the dashboard outside opening hours (assumed 30 min/day) | ~7 h |
+| **Total for the 14 days** | **~210 h × 0.25 CU ≈ 52 CU-h** |
 
-| Situation | CU-h / month | Within 100? |
+That is **about half of the 100 CU-h free allowance**. For comparison:
+
+| Situation | CU-h |
+|---|---|
+| Before P1 (Neon never sleeps while the API is awake), 14 days | ~84 |
+| After P1, 14-day study at opening hours | **~52** |
+| After P1, opening hours for a **whole calendar month** (~429 h) | **~112: over the free 100** |
+
+### Storage
+
+| | Rows kept (7-day retention, 100 h/week) | Size |
 |---|---|---|
-| **Today**, API kept awake 24/7 (pinger), nodes on or off | 0.25 × 24 h × 30 d = **~180** | No |
-| Today, but only the 14 study days in a month | 0.25 × 24 × 14 = **~84** (+ any other use) | Just, with little margin |
-| After **P1** (DB untouched while no node is on), nodes on 12 h/day | 0.25 × 12 × 30 = **~90** (+ dashboard use) | Yes, tight |
-| After P1, nodes on 10 h/day | **~75** | Yes |
-| P2 or P3 alone (fewer rows) | **unchanged** (still a query every second) | No change |
-| Full buffering (engine state in memory, flush every 15 min) | ~**60** even 24/7 | Yes, but see below |
+| Before P2 (1 row per reading) | 2.52 million | ~390 MB |
+| **After P2 (1 row per table per 10 s)** | **252,000** | **~46 MB** |
 
-### Storage (7-day raw-readings retention, 7 nodes)
+Incidents, violations, accounts and seat history add only a few MB.
 
-| Situation | Rows kept | Size |
-|---|---|---|
-| **Today**, nodes 24/7 (1 row per second) | 4.2 million | **~650 MB: over 0.5 GB** |
-| Today, nodes 12 h/day | 2.1 million | ~330 MB (fits, little room left) |
-| **P2**, one row per table per 10 s, 24/7 | 423,000 | **~65 MB** |
-| P2 at 30 s, 24/7 | 141,000 | ~22 MB |
+## 4. Verdict
 
-## 3. Proposal
+**Yes, the 14-day study fits the Neon free plan:** about 52 of 100 CU-h and
+about 46 MB of ~500 MB.
 
-**P1. Let Neon sleep when no node is on** (small, low risk). The 15 s offline
-check skips the database when no telemetry has arrived since its last run and
-nothing is marked online. The hourly readings cleanup becomes daily. Results are
-identical to today; there are just no queries while everything is quiet. *Saves
-compute only if the nodes are switched off part of the day.*
-
-**P2. Store one reading row per table every 10 s instead of every second.**
-- The violation engine keeps running on **every** reading, exactly as now.
-  Streaks, the 10 s duration rule, audio requests and LEDs are unchanged, and
-  violations are still decided in real time.
-- Every 10 s the API writes one row per table: the **average** (same arithmetic
-  mean the analytics use today), the **peak** and the number of readings.
-  Migration 018 adds `peak_db` and `samples` to `noise_readings`.
-- Live values on the dashboard still come from the latest reading (unchanged).
-- Writes: `noise_readings` inserts drop from 420 to 42 per minute (−90%).
-  Storage: ~650 MB → ~65 MB.
-- Cost: raw-reading exports and charts become 10 s resolution instead of 1 s.
-  Up to 10 s of averages are lost if the API restarts. Readings sent while the
-  API sleeps or restarts are lost today anyway.
-
-**P3. (Optional) Update `sensor_status.last_seen` at most every 5 s** instead of
-on every reading. `sensor_status` writes drop from 420 to ~84 per minute.
-Offline detection still works (it waits 15 s), at 5 s granularity.
-
-**Not recommended for a 14-day study:** full buffering (engine state in memory,
-database flushed every 15 min). It needs the dashboards, the offline check and
-the 24 h stats to stop reading the database too, and it risks losing up to 15
-minutes of data on every restart. It is a big rewrite for ~30 CU-h.
-
-### Recommendation
-
-- **P2 (needed):** at one row per second, a 24/7 deployment doesn't fit in the
-  free storage.
-- **P1 plus nodes on only during Studify's opening hours:** that fits the
-  free compute.
-- If the nodes must run 24/7, plan for **Neon's paid plan for the study month**
-  (check the current price). Either way, set a usage alert in the Neon console.
-- P3 is optional.
-
-With P1 and P2, nodes on 12 h/day: about 90 CU-h and under 70 MB. With P2
-only, 24/7: about 84 CU-h for exactly 14 days, but the rest of that month has
-almost no headroom.
+Conditions:
+- Power the nodes only during opening hours. With nodes on 24/7 the 14 days
+  would need ~84 CU-h: still under 100, but with little room for anything else
+  that month.
+- Keep the rest of that calendar month light. Running the nodes every opening
+  hour for a whole month (~112 CU-h) would exceed the free plan; if you keep
+  collecting after the study, switch to a paid plan for that month.
+- Set a usage alert in the Neon console, and look at *Compute usage* after the
+  first 2–3 days to confirm the ~3.7 CU-h/day rate (52 ÷ 14).
+- `enoise-dev` is a separate project with its own allowance, so development
+  doesn't eat into production's.

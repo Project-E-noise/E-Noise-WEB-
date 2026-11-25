@@ -38,7 +38,7 @@ MQTT topics (`server/src/mqtt/topics.js`):
 
 | Topic | Direction | Payload |
 |---|---|---|
-| `enoise/<node>/telemetry` | device -> API | `{"db_level": 62.4}` (+ optional `classification`, `confidence`, `timestamp`) |
+| `enoise/<node>/telemetry` | device -> API | `{"db_level": 62.4, "fw": "1.1.0"}` (+ optional `classification`, `confidence`, `timestamp`) |
 | `enoise/<node>/status` | device -> API, retained, also the Last Will | `{"online": true}` |
 | `enoise/<node>/led` | API -> device, retained | `{"green":5,"yellow":3,"red":0,"critical":false}` |
 | `enoise/<node>/audio-request` | API -> device | `{"request":"capture"}` |
@@ -98,10 +98,18 @@ Table Configuration is all it takes to register a node.
   The same job removes the occupant from incidents older than that and deletes seat
   history released that long ago (current seats are kept). An admin can lift a ban
   early. Incident + violation + ban are saved in one transaction.
-- **Raw readings:** `noise_readings` older than `NOISE_READINGS_RETENTION_DAYS`
-  (default 7) are deleted every hour in batches, to stay inside Neon's free 1 GB.
-  Incidents, violations and sensor status are separate and not affected. Analytics
-  and readings exports can therefore only cover the last 7 days.
+- **Calibration:** each table has a calibration offset and gain (Table Configuration,
+  default 0 dB / x1). The API stores and judges `gain x raw + offset` for every
+  reading (docs/CALIBRATION.md).
+- **Readings storage:** every reading is judged on its own, in real time, but
+  `noise_readings` stores one row per table per **10 s** (average, peak, number of
+  readings; `services/readingWindows.js`). Rows older than
+  `NOISE_READINGS_RETENTION_DAYS` (default 7) are deleted daily in batches, to stay
+  inside Neon's free storage. Incidents, violations and sensor status are separate
+  and not affected. Analytics and readings exports can only cover the last 7 days,
+  at 10 s resolution.
+- **Letting the database sleep:** while no node has sent anything, the API sends no
+  queries at all, so Neon can sleep (docs/DB_LOAD_PROPOSAL.md).
 - **Categories:** exactly five, spelled identically in JS, SQL and Python (checked by
   `server/tests/categories-sync.test.js`): `Loud Conversation`, `Mobile Phone Noise`,
   `Music`, `Impact Noise`, `Ambient Baseline`. Incident statuses: `CONFIRMED`,
@@ -220,7 +228,7 @@ Running it again adds nothing new.
 | `LED_GREEN_FLOOR_DB`, `LED_RED_STEP_DB` | | LED band edges, default `50` / `5` dB: green counts up in 5 steps from the floor to the warning threshold; the 2nd red LED lights this far above critical. **Provisional until calibration** |
 | `DEFAULT_WARNING_THRESHOLD`, `DEFAULT_CRITICAL_THRESHOLD` | | Thresholds (dB) given to **new** tables, default `68` / `75`. **Provisional until calibration** (Studify's quiet room read ~60 dB, talking ~80-90 dB, uncalibrated). Existing tables keep their own values; change them on the Thresholds page |
 | `SENSOR_STALE_SECONDS` | | A sensor counts as offline after this many seconds without a reading (default 15) |
-| `NOISE_READINGS_RETENTION_DAYS` | | Days raw noise readings are kept; older ones are deleted every hour (default 7, positive whole number) |
+| `NOISE_READINGS_RETENTION_DAYS` | | Days the 10 s reading rows are kept; older ones are deleted once a day (default 7, positive whole number) |
 | `VIOLATION_RETENTION_DAYS` | | Days a violation is kept before the daily cleanup deletes it (default 30, positive whole number) |
 | `TEST_DATABASE_URL` | for tests | Separate database whose name contains `test` (it is wiped) |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_CLIENT_EMAIL`, `SEED_CLIENT_PASSWORD` | | Accounts created by the seed |
@@ -421,10 +429,9 @@ while it sleeps are lost. During opening hours, keep it awake with a free monito
 
 - [UptimeRobot](https://uptimerobot.com) (HTTP monitor, 5-minute interval) or
   [cron-job.org](https://cron-job.org) (every 10 minutes) calling `https://<service>.onrender.com/health`.
-- `/health` doesn't touch the database. But while the API is awake, its 15-second
-  offline check queries the database, so **Neon never sleeps either** (about 180
-  compute hours a month if awake 24/7; the free plan has 100). See
-  [docs/DB_LOAD_PROPOSAL.md](docs/DB_LOAD_PROPOSAL.md).
+- `/health` doesn't touch the database, and while no node is sending, the API sends
+  no queries at all, so Neon sleeps when the nodes are off (outside opening hours).
+  See [docs/DB_LOAD_PROPOSAL.md](docs/DB_LOAD_PROPOSAL.md) for the compute estimate.
 - One service awake all month uses ~744 of the 750 free hours. Don't run a second
   free service in the same Render workspace around the clock.
 
@@ -468,9 +475,11 @@ each ESP32, and check the table shows "Online" in Live Overview.
 
 ## Known limitations
 
-- **dB values are not calibrated.** The firmware turns microphone voltage into an
-  estimated dB value using an assumed reference point. Calibrate against a sound level
-  meter before treating readings as real dB(A) (`docs/HARDWARE_GUIDE.md`).
+- **dB values are not calibrated yet.** Calibrate every node against a reference
+  meter after flashing firmware 1.1.0 (docs/CALIBRATION.md), and switch the
+  MAX9814's AGC off in hardware (TH to MICBIAS); the firmware can't. Until then
+  readings are shown as "dB (est.)". There is a 150 Hz high-pass filter but no full
+  A-weighting.
 - **The classifier is not validated.** YAMNet's 521 classes are mapped to the five
   categories by an explicit class list (`ml-service/category_mapping.py`); it has not
   been tested on labeled study-hub audio, and `MIN_CONFIDENCE` is a placeholder.
@@ -485,5 +494,7 @@ each ESP32, and check the table shows "Online" in Live Overview.
   is informational only.
 - Client portal date filters use whole UTC days; admin pages use the viewer's local time.
 - HiveMQ Cloud Serverless is retired on 2026-12-31 (see Deployment step 2).
-- The firmware's dB calibration table (`CAL_TABLE`) holds placeholder values until
-  bench calibration; readings are shown as "dB (est.)".
+- The firmware's base curve (`CAL_TABLE`) holds placeholder rows; the per-node
+  calibration offset/gain is applied on top of it by the API.
+- If the API crashes, up to the last 10 s of stored averages can be lost (the live
+  view and violation decisions are not affected).

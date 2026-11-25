@@ -127,7 +127,7 @@ Read the tiny labels on your module itself; do not wire by position alone. The m
 | GAIN | Leave floating: reported 60 dB setting |
 | A/R | Leave floating unless module documentation for this exact board says otherwise; the reported default is 1:4000 |
 
-The reported gain options are floating=60 dB, GAIN to GND=50 dB, and GAIN to VDD=40 dB. The firmware comments/calibration assume the floating 60 dB choice. Lower gain usually makes both telemetry swings and audio samples smaller; AGC makes the difference non-constant, so changing gain can shift dB readings and affect audio classification. Exact breakout behavior is **unverified: confirm on the bench**.
+The reported gain options are floating=60 dB, GAIN to GND=50 dB, and GAIN to VDD=40 dB. With AGC switched off (TH to MICBIAS, see Calibration), use GAIN to VDD (40 dB) so 80-90 dB talking does not clip, and calibrate after any gain change. Lower gain usually makes both telemetry swings and audio samples smaller; AGC makes the difference non-constant, so changing gain can shift dB readings and affect audio classification. Exact breakout behavior is **unverified: confirm on the bench**.
 
 ## Power and resistor math
 
@@ -333,16 +333,25 @@ For dashboard-only simulation, use the virtual node in `tools/simulator/` (see i
 
 ## Calibration
 
-The firmware measures the RMS of the microphone signal over each whole second (AC part only, the DC bias is subtracted) in millivolts, using `analogReadMilliVolts()` on GPIO34 (ADC1). It turns that into dB with a **multi-point table** `CAL_TABLE` in `enoise_node.ino` (rows of `{ mV RMS, dB }`, interpolated in `20*log10(mV)`). The rows shipped in the firmware are **PLACEHOLDERS, not measurements**; until you replace them the dashboard labels readings "dB (est.)". Use a phone SPL app as a rough reference or, preferably, an SPL meter, side by side with the mic in a quiet, stable setup.
+**Follow [docs/CALIBRATION.md](CALIBRATION.md).** In short:
 
-1. Set the phone app or SPL meter to the weighting and response mode you will use consistently (dB(A), slow).
-2. Flash the normal firmware. With `PRINT_RMS_MV` left `true`, the Serial Monitor (115200 baud) prints `[level] rms=12.3 mV -> 51.2 dB (3950 samples)` once per second. Check that the sample count is well above `LEVEL_MIN_SAMPLES` (2000); if it is not, the loop is too busy and the reading is skipped.
-3. Produce a steady sound (a tone or white noise from a speaker) at a quiet level. Wait a few seconds for the readings to settle, note the typical `rms=... mV` value and the meter's dB(A) at the same moment. That is one row.
-4. Repeat at four to six levels spread over the range you care about (quiet room, normal talk, loud talk, shouting / music). Keep the sound steady at each level; do not use transients.
-5. Enter the rows in `CAL_TABLE` sorted by mV (at least two rows), re-flash, and check a few levels against the meter again. Then set `DB_CALIBRATED` to `true` in `capstone/src/constants.js` and `db_calibrated` in `server/src/controllers/systemController.js`.
-6. Repeat calibration after changing mic gain, module, enclosure, placement, or firmware, and before relying on study results.
+- **Firmware 1.1.0 first.** Its 150 Hz high-pass filter changes the readings,
+  so calibrate only after flashing it.
+- **Switch the MAX9814's AGC off.** The firmware can't. Per the datasheet,
+  connect **TH to MICBIAS**. If your breakout doesn't expose TH, use a
+  microphone without AGC (MAX4466, or an INMP441 over I2S). With AGC off, set
+  **GAIN to VDD (40 dB)** so loud talking doesn't clip, and confirm on the bench
+  that a sound 10 dB louder reads about 10 dB higher.
+- **Calibration mode:** type `cal` + Enter in the Serial Monitor (115200 baud).
+  The node prints `[cal] node=... fw=1.1.0 raw_db=... rms_mv=...` once per second
+  and publishes no telemetry.
+- **Per-node correction:** compare with a reference meter at 50 / 65 / 80 dB(A)
+  (1 kHz tone), compute the offset (or gain + offset) with
+  `tools/calibration/compute-offset.js`, and enter it in Table Configuration.
+  `CAL_TABLE` in the firmware stays the shared base curve (placeholder rows); the
+  dashboard correction is applied on top.
 
-The MAX9814 has automatic gain control, so the mV-to-dB relation is not fixed across levels (that is why the table has several points), and there is no A-weighting filter. Phone app accuracy and your module's response are **unverified: confirm on the bench**.
+Phone app accuracy and your module's response are **unverified: confirm on the bench**.
 
 ## Mounting and placement
 
