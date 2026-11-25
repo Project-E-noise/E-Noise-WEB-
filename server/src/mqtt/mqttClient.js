@@ -71,11 +71,15 @@ export function connectMqtt() {
   client.on("message", (topic, payload, packet) => {
     const nodeId = nodeIdFromTopic(topic);
     if (!nodeId) return;
+    // The time the message ARRIVED. Messages of one node are processed one
+    // after another, so when the database is slow a reading may be handled a
+    // little later; the loud-streak timer must still use the real time.
+    const receivedAt = new Date();
 
     if (topic.endsWith("/telemetry")) {
       const parsed = parseTelemetry(payload);
       if (parsed.error) return console.warn(`[mqtt] Bad telemetry from ${nodeId}: ${parsed.error}`);
-      runInOrder(nodeId, () => ingestTelemetry(nodeId, parsed));
+      runInOrder(nodeId, () => ingestTelemetry(nodeId, parsed, { now: receivedAt }));
     } else if (topic.endsWith("/status")) {
       const parsed = parseStatus(payload);
       if (parsed.error) return console.warn(`[mqtt] Bad status from ${nodeId}: ${parsed.error}`);
@@ -86,7 +90,7 @@ export function connectMqtt() {
       // Binary WAV clip. Classification can take seconds (or the ML
       // service may be asleep), so it does not hold up the telemetry queue.
       // The buffer only lives in memory; it is never written to disk.
-      ingestAudioClip(nodeId, payload).catch(err => console.error(`[mqtt] Audio from ${nodeId} failed:`, err.message));
+      ingestAudioClip(nodeId, payload, { now: receivedAt }).catch(err => console.error(`[mqtt] Audio from ${nodeId} failed:`, err.message));
     }
   });
 

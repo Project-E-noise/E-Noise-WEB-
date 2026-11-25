@@ -30,7 +30,8 @@ const warnedUnknownNodeIds = new Set();
 /**
  * Handles one telemetry message: store the reading, run the confirmation
  * engine, send the LED state back to the device, and push the update to
- * open dashboards. `now` is only passed by tests (simulated time).
+ * open dashboards. `now` is when the message arrived (mqttClient.js), or a
+ * simulated time in the tests.
  *
  * mqttClient.js processes messages for the same node one at a time, so two
  * readings can never run the engine at the same moment for one table.
