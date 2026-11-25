@@ -28,11 +28,23 @@
  *                  ADC2 pins (GPIO 0, 2, 4, 12-15, 25-27) cannot be read
  *                  while Wi-Fi is on.
  *   MAX9814 VCC -> 3V3, GND -> GND, GAIN pin floating (60 dB gain)
+ *   AGC: the MAX9814's automatic gain control changes the gain with the
+ *   sound level, which makes dB readings unreliable. Firmware CANNOT turn it
+ *   off: per the datasheet, wire the chip's TH pin to MICBIAS. Many breakout
+ *   boards don't expose TH; then use a microphone without AGC (MAX4466 or
+ *   an I2S INMP441). With AGC off, set GAIN to VDD (40 dB) so 80-90 dB
+ *   talking doesn't clip. See docs/CALIBRATION.md.
  *   11 LEDs, each through a 220-330 ohm resistor to GND, anodes to:
  *     Green:    GPIO 4, 5, 18, 19, 21
  *     Yellow:   GPIO 22, 23, 32
  *     Red:      GPIO 25, 26
  *     Critical: GPIO 27 (blinks locally while the backend says "critical")
+ *
+ * Calibration mode (docs/CALIBRATION.md): type "cal" + Enter in the Serial
+ * Monitor (115200 baud) to switch it on/off, or build with
+ * -DCALIBRATION_MODE=1. It prints the uncorrected level once per second and
+ * publishes NO telemetry, so playing test tones creates no events. The node
+ * stays connected and online.
  *
  * Connection handling: nothing in loop() waits for Wi-Fi or MQTT. Each
  * reconnect attempt is spaced out with a growing delay (2 s, 4 s, 8 s ...
@@ -49,6 +61,14 @@
 #include "secrets.h"
 #else
 #error "secrets.h is missing: copy secrets.example.h to secrets.h and fill in your Wi-Fi and broker details."
+#endif
+
+// Sent in every reading ("fw") and shown on the table page. Bump it for every
+// build you flash, and flash the same version to every node.
+#define FIRMWARE_VERSION "1.1.0"
+
+#ifndef CALIBRATION_MODE
+#define CALIBRATION_MODE 0
 #endif
 
 #ifndef MQTT_CA_CERT
@@ -94,6 +114,13 @@ const int CRITICAL_PIN = 27;
 const uint32_t LEVEL_SAMPLE_INTERVAL_US = 250;   // 4 kHz target (> 2 kHz to limit aliasing)
 const uint32_t LEVEL_MIN_SAMPLES = 2000;         // at least 2 kHz average over the second
 
+// High-pass filter against highway rumble: a first-order filter at 150 Hz,
+// applied to every sample before the RMS (an A-weighted meter also turns
+// low frequencies down; this is a cheap partial version of that). It also
+// removes the mic's DC bias. Calibrate AFTER flashing firmware with it.
+const float HPF_CUTOFF_HZ = 150.0f;
+const float HPF_RC_US = 1000000.0f / (2.0f * PI * HPF_CUTOFF_HZ); // ~1061 us
+
 // ---- Calibration table: PLACEHOLDER VALUES, NOT MEASURED ----------------
 // Each row maps the AC RMS microphone voltage (millivolts) to the sound
 // level (dB(A)) read on a reference meter at the same moment. Fill these
@@ -119,7 +146,7 @@ const int CAL_POINTS = sizeof(CAL_TABLE) / sizeof(CAL_TABLE[0]);
 static_assert(sizeof(CAL_TABLE) / sizeof(CAL_TABLE[0]) >= 2, "CAL_TABLE needs at least two points.");
 const float DB_FLOOR = 30.0f;
 const float DB_CEIL = 100.0f;
-const bool PRINT_RMS_MV = true; // Serial "[level] rms=12.3 mV -> 51.2 dB" every second (used for calibration)
+const bool PRINT_RMS_MV = false; // true: also print "[level] ..." every second in normal mode
 
 // ---------------------------------------------------------------------
 // State
@@ -142,12 +169,18 @@ unsigned long lastTelemetryAt = 0;
 unsigned long lastLedCommandAt = 0;
 bool ledFailsafeActive = false;
 bool audioCaptureRequested = false;
+bool calibrationMode = CALIBRATION_MODE;
+
+// High-pass filter state (previous input and output, in mV).
+float hpPrevIn = 0, hpPrevOut = 0;
+bool hpSeeded = false;
 
 // Running level accumulators for the current one-second window.
 uint32_t levelSampleCount = 0;
 double levelSum = 0;    // sum of mV
 double levelSumSq = 0;  // sum of mV^2
 unsigned long lastLevelSampleUs = 0;
+float lastRmsMv = 0; // for the calibration-mode line
 
 void setup() {
   Serial.begin(115200);
@@ -158,6 +191,7 @@ void setup() {
   snprintf(audioRequestTopic, sizeof(audioRequestTopic), "enoise/%s/audio-request", NODE_ID);
   snprintf(audioTopic, sizeof(audioTopic), "enoise/%s/audio", NODE_ID);
 
+  Serial.printf("[boot] E-Noise node %s, firmware %s%s\n", NODE_ID, FIRMWARE_VERSION, calibrationMode ? " (calibration mode)" : "");
   setupLedPins();
   analogReadResolution(12);
   analogSetPinAttenuation(MIC_PIN, ADC_11db); // full 0-3.3 V range (the mic output is biased at ~1.25 V)
@@ -180,6 +214,7 @@ void setup() {
 
 void loop() {
   sampleLevel(); // cheap; runs on every pass
+  handleSerialCommands();
 
   maintainWifi();
   maintainMqtt();
@@ -189,7 +224,7 @@ void loop() {
   if (audioCaptureRequested) {
     audioCaptureRequested = false;
     captureAndPublishAudio();
-    resetLevelWindow(); // the capture blocked the loop: start a fresh second
+    restartLevelAfterBlocking(); // the capture blocked the loop: start a fresh second
   }
 
   updateCriticalBlink();
@@ -199,7 +234,10 @@ void loop() {
   if (now - lastTelemetryAt >= TELEMETRY_INTERVAL_MS) {
     lastTelemetryAt = now;
     float db;
-    if (finishLevelWindow(&db)) publishTelemetry(db);
+    if (finishLevelWindow(&db)) {
+      if (calibrationMode) printCalibrationLine(db);
+      else publishTelemetry(db);
+    }
     // else: too few samples this second (loop was blocked) -> no reading published
   }
 }
@@ -265,7 +303,7 @@ void maintainMqtt() {
     mqttNextAttemptAt = now + mqttRetryDelay;
     mqttRetryDelay = nextDelay(mqttRetryDelay);
   }
-  resetLevelWindow(); // the TLS handshake blocked the loop
+  restartLevelAfterBlocking(); // the TLS handshake blocked the loop
 }
 
 // ---------------------------------------------------------------------
@@ -278,16 +316,36 @@ void resetLevelWindow() {
   lastLevelSampleUs = micros();
 }
 
+// After the loop was blocked (audio capture, TLS handshake): start a fresh
+// window and restart the filter, so the gap isn't seen as a sudden jump.
+void restartLevelAfterBlocking() {
+  resetLevelWindow();
+  hpSeeded = false;
+}
+
 // One ADC sample if it is time for the next one. Never waits.
 void sampleLevel() {
   unsigned long nowUs = micros();
-  if ((long)(nowUs - lastLevelSampleUs) < (long)LEVEL_SAMPLE_INTERVAL_US) return;
+  unsigned long dtUs = nowUs - lastLevelSampleUs;
+  if ((long)dtUs < (long)LEVEL_SAMPLE_INTERVAL_US) return;
   lastLevelSampleUs = nowUs;
   // analogReadMilliVolts applies the chip's factory ADC calibration, so
   // the value is in real millivolts rather than raw counts.
-  uint32_t mv = analogReadMilliVolts(MIC_PIN);
-  levelSum += mv;
-  levelSumSq += (double)mv * (double)mv;
+  float mv = (float)analogReadMilliVolts(MIC_PIN);
+
+  // First-order high-pass: out = a * (prevOut + in - prevIn). The loop's
+  // sampling isn't perfectly regular, so a is computed from the real gap.
+  float out = 0;
+  if (hpSeeded) {
+    float a = HPF_RC_US / (HPF_RC_US + (float)dtUs);
+    out = a * (hpPrevOut + mv - hpPrevIn);
+  }
+  hpPrevIn = mv;
+  hpPrevOut = out;
+  hpSeeded = true;
+
+  levelSum += out;
+  levelSumSq += (double)out * (double)out;
   levelSampleCount++;
 }
 
@@ -308,10 +366,39 @@ bool finishLevelWindow(float* dbOut) {
   double variance = sumSq / n - mean * mean;
   if (variance < 0) variance = 0;
   float rmsMv = (float)sqrt(variance);
+  lastRmsMv = rmsMv;
 
   *dbOut = rmsToDb(rmsMv);
   if (PRINT_RMS_MV) Serial.printf("[level] rms=%.2f mV -> %.1f dB (%lu samples)\n", rmsMv, *dbOut, (unsigned long)n);
   return true;
+}
+
+// Calibration mode: one line per second with the UNCORRECTED level (the
+// server applies each node's offset/gain later). Copy these into the
+// calibration CSV (docs/CALIBRATION.md).
+void printCalibrationLine(float db) {
+  Serial.printf("[cal] node=%s fw=%s raw_db=%.1f rms_mv=%.2f\n", NODE_ID, FIRMWARE_VERSION, db, lastRmsMv);
+}
+
+// Serial commands: "cal" (toggle), "cal on", "cal off". Read without waiting.
+void handleSerialCommands() {
+  static char line[16];
+  static uint8_t len = 0;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\r') continue;
+    if (c != '\n') {
+      if (len < sizeof(line) - 1) line[len++] = c;
+      continue;
+    }
+    line[len] = '\0';
+    len = 0;
+    if (strcmp(line, "cal") == 0) calibrationMode = !calibrationMode;
+    else if (strcmp(line, "cal on") == 0) calibrationMode = true;
+    else if (strcmp(line, "cal off") == 0) calibrationMode = false;
+    else continue;
+    Serial.printf("[cal] Calibration mode %s: telemetry is %s.\n", calibrationMode ? "ON" : "OFF", calibrationMode ? "NOT published" : "published again");
+  }
 }
 
 // Multi-point calibration: linear in 20*log10(mV) between table rows.
@@ -331,15 +418,15 @@ float rmsToDb(float rmsMv) {
 }
 
 // ---------------------------------------------------------------------
-// Telemetry: { "db_level": 52.3 }
+// Telemetry: { "db_level": 52.3, "fw": "1.1.0" }
 // No timestamp (no clock needed by the backend): it uses the arrival time.
 // No classification: YAMNet runs on the server.
 // ---------------------------------------------------------------------
 void publishTelemetry(float dbLevel) {
   if (!mqtt.connected()) return; // readings while offline are skipped, not queued
 
-  char payload[48];
-  snprintf(payload, sizeof(payload), "{\"db_level\":%.1f}", dbLevel);
+  char payload[64];
+  snprintf(payload, sizeof(payload), "{\"db_level\":%.1f,\"fw\":\"%s\"}", dbLevel, FIRMWARE_VERSION);
   mqtt.publish(telemetryTopic, payload, false);
 }
 
@@ -416,7 +503,7 @@ void updateLedFailsafe() {
 // the one place the loop blocks (~1 s); the level window is reset after.
 // ---------------------------------------------------------------------
 void captureAndPublishAudio() {
-  if (!mqtt.connected()) return;
+  if (!mqtt.connected() || calibrationMode) return;
 
   const uint32_t dataBytes = AUDIO_NUM_SAMPLES * sizeof(int16_t);
   if (ESP.getMaxAllocHeap() < dataBytes + 4096) {
